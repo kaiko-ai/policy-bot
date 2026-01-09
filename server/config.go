@@ -71,6 +71,12 @@ type CachingConfig struct {
 	// The size of the global cache for commit push times. Each entry uses
 	// roughly 100 bytes of memory.
 	PushedAtSize int `yaml:"pushed_at_size"`
+
+	// The maximum number of cached results for details page evaluations.
+	DetailsResultSize int `yaml:"details_result_size"`
+
+	// The duration to cache details page evaluations before recomputing them.
+	DetailsResultTTL time.Duration `yaml:"details_result_ttl"`
 }
 
 type WorkerConfig struct {

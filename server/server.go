@@ -50,6 +50,8 @@ const (
 
 	DefaultHTTPCacheSize     = 50 * datasize.MB
 	DefaultPushedAtCacheSize = 100_000
+	DefaultDetailsCacheSize  = 512
+	DefaultDetailsCacheTTL   = 30 * time.Second
 )
 
 type Server struct {
@@ -148,6 +150,23 @@ func New(c *Config) (*Server, error) {
 		return nil, errors.Wrap(err, "failed to initialize global cache")
 	}
 
+	detailsCacheSize := c.Cache.DetailsResultSize
+	if detailsCacheSize == 0 {
+		detailsCacheSize = DefaultDetailsCacheSize
+	}
+	detailsCacheTTL := c.Cache.DetailsResultTTL
+	if detailsCacheTTL == 0 {
+		detailsCacheTTL = DefaultDetailsCacheTTL
+	}
+
+	var detailsResultCache *handler.DetailsResultCache
+	if detailsCacheSize > 0 && detailsCacheTTL > 0 {
+		detailsResultCache, err = handler.NewDetailsResultCache(detailsCacheSize, detailsCacheTTL)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to initialize details result cache")
+		}
+	}
+
 	policyPaths := []string{c.Options.PolicyPath}
 	if c.Options.ForceSharedPolicy {
 		policyPaths = []string{}
@@ -163,6 +182,7 @@ func New(c *Config) (*Server, error) {
 		BaseConfig:    &c.Server,
 		Installations: githubapp.NewInstallationsService(appClient),
 		GlobalCache:   globalCache,
+		ResultCache:   detailsResultCache,
 
 		PullOpts: &c.Options,
 		ConfigFetcher: &handler.ConfigFetcher{

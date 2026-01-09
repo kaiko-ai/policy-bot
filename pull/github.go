@@ -18,11 +18,13 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-github/v81/github"
 	"github.com/hairyhenderson/go-codeowners"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
 	"github.com/shurcooL/githubv4"
 )
 
@@ -149,6 +151,27 @@ type GitHubContext struct {
 	codeownersResult *CodeownersResult
 	codeownersLoaded bool
 	codeownersErr    error
+
+	body *Body
+
+	bodyOnce         sync.Once
+	bodyErr          error
+	filesOnce        sync.Once
+	filesErr         error
+	pagedOnce        sync.Once
+	pagedErr         error
+	reviewersOnce    sync.Once
+	reviewersErr     error
+	statusesOnce     sync.Once
+	statusesErr      error
+	workflowRunsOnce sync.Once
+	workflowRunsErr  error
+	labelsOnce       sync.Once
+	labelsErr        error
+	customPropsOnce  sync.Once
+	customPropsErr   error
+	teamsOnce        sync.Once
+	teamsErr         error
 }
 
 // NewGitHubContext creates a new pull.Context that makes GitHub requests to
@@ -193,6 +216,18 @@ func (ghc *GitHubContext) EvaluationTimestamp() time.Time {
 	return ghc.evalTimestamp
 }
 
+func (ghc *GitHubContext) logTiming(op string, start time.Time, err error) {
+	logger := zerolog.Ctx(ghc.ctx).With().
+		Str("op", op).
+		Dur("elapsed", time.Since(start)).
+		Logger()
+	if err != nil {
+		logger.Debug().Err(err).Msg("pull_context_timing")
+		return
+	}
+	logger.Debug().Msg("pull_context_timing")
+}
+
 func (ghc *GitHubContext) RepositoryOwner() string {
 	return ghc.owner
 }
@@ -202,12 +237,14 @@ func (ghc *GitHubContext) RepositoryName() string {
 }
 
 func (ghc *GitHubContext) RepositoryCustomProperties() (map[string]CustomProperty, error) {
-	if ghc.repositoryCustomProperties == nil {
-		if err := ghc.loadRepositoryCustomProperties(); err != nil {
-			return nil, err
-		}
+	ghc.customPropsOnce.Do(func() {
+		start := time.Now()
+		ghc.customPropsErr = ghc.loadRepositoryCustomProperties()
+		ghc.logTiming("repository_custom_properties", start, ghc.customPropsErr)
+	})
+	if ghc.customPropsErr != nil {
+		return nil, ghc.customPropsErr
 	}
-
 	return ghc.repositoryCustomProperties, nil
 }
 
@@ -251,6 +288,18 @@ type v4PullRequestWithEditedAt struct {
 }
 
 func (ghc *GitHubContext) Body() (*Body, error) {
+	ghc.bodyOnce.Do(func() {
+		start := time.Now()
+		ghc.body, ghc.bodyErr = ghc.loadBody()
+		ghc.logTiming("pull_request_body", start, ghc.bodyErr)
+	})
+	if ghc.bodyErr != nil {
+		return nil, ghc.bodyErr
+	}
+	return ghc.body, nil
+}
+
+func (ghc *GitHubContext) loadBody() (*Body, error) {
 	var q struct {
 		Repository struct {
 			PullRequest v4PullRequestWithEditedAt `graphql:"pullRequest(number: $number)"`
@@ -316,69 +365,85 @@ func (ghc *GitHubContext) ChangedFiles() ([]*File, error) {
 		return nil, errors.Errorf("number of changed files (%d) exceeds limit (%d)", ghc.pr.ChangedFiles, MaxPullRequestFiles)
 	}
 
-	if ghc.files == nil {
-		opt := github.ListOptions{
-			PerPage: 100,
-		}
-
-		var allFiles []*github.CommitFile
-		for {
-			files, res, err := ghc.client.PullRequests.ListFiles(ghc.ctx, ghc.owner, ghc.repo, ghc.number, &opt)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to list pull request files")
-			}
-			allFiles = append(allFiles, files...)
-			if res.NextPage == 0 {
-				break
-			}
-			opt.Page = res.NextPage
-		}
-
-		ghc.files = make([]*File, 0, len(allFiles))
-		for _, f := range allFiles {
-			status := FileModified
-			switch f.GetStatus() {
-			case "added":
-				status = FileAdded
-			case "removed":
-				status = FileDeleted
-			case "renamed":
-				// Break renames into components: the new file is added and we
-				// generate an extra entry for the old file that is deleted.
-				// Attribute all modifications to the new file to avoid double
-				// counting.
-				status = FileAdded
-				ghc.files = append(ghc.files, &File{
-					Filename:  f.GetPreviousFilename(),
-					Status:    FileDeleted,
-					Additions: 0,
-					Deletions: 0,
-				})
-			}
-
-			ghc.files = append(ghc.files, &File{
-				Filename:  f.GetFilename(),
-				Status:    status,
-				Additions: f.GetAdditions(),
-				Deletions: f.GetDeletions(),
-			})
-		}
+	ghc.filesOnce.Do(func() {
+		start := time.Now()
+		ghc.filesErr = ghc.loadChangedFiles()
+		ghc.logTiming("changed_files", start, ghc.filesErr)
+	})
+	if ghc.filesErr != nil {
+		return nil, ghc.filesErr
 	}
-
 	return ghc.files, nil
 }
 
-func (ghc *GitHubContext) Commits() ([]*Commit, error) {
-	if ghc.commits == nil {
-		err := ghc.loadPagedData()
+func (ghc *GitHubContext) loadChangedFiles() error {
+	opt := github.ListOptions{
+		PerPage: 100,
+	}
+
+	var allFiles []*github.CommitFile
+	for {
+		files, res, err := ghc.client.PullRequests.ListFiles(ghc.ctx, ghc.owner, ghc.repo, ghc.number, &opt)
 		if err != nil {
-			return nil, err
+			return errors.Wrap(err, "failed to list pull request files")
 		}
+		allFiles = append(allFiles, files...)
+		if res.NextPage == 0 {
+			break
+		}
+		opt.Page = res.NextPage
+	}
+
+	ghc.files = make([]*File, 0, len(allFiles))
+	for _, f := range allFiles {
+		status := FileModified
+		switch f.GetStatus() {
+		case "added":
+			status = FileAdded
+		case "removed":
+			status = FileDeleted
+		case "renamed":
+			// Break renames into components: the new file is added and we
+			// generate an extra entry for the old file that is deleted.
+			// Attribute all modifications to the new file to avoid double
+			// counting.
+			status = FileAdded
+			ghc.files = append(ghc.files, &File{
+				Filename:  f.GetPreviousFilename(),
+				Status:    FileDeleted,
+				Additions: 0,
+				Deletions: 0,
+			})
+		}
+
+		ghc.files = append(ghc.files, &File{
+			Filename:  f.GetFilename(),
+			Status:    status,
+			Additions: f.GetAdditions(),
+			Deletions: f.GetDeletions(),
+		})
+	}
+
+	return nil
+}
+
+func (ghc *GitHubContext) Commits() ([]*Commit, error) {
+	if err := ghc.ensurePagedData(); err != nil {
+		return nil, err
 	}
 	if len(ghc.commits) >= MaxPullRequestCommits {
 		return nil, errors.Errorf("too many commits in pull request, maximum is %d", MaxPullRequestCommits)
 	}
 	return ghc.commits, nil
+}
+
+func (ghc *GitHubContext) ensurePagedData() error {
+	ghc.pagedOnce.Do(func() {
+		start := time.Now()
+		ghc.pagedErr = ghc.loadPagedData()
+		ghc.logTiming("paged_data", start, ghc.pagedErr)
+	})
+	return ghc.pagedErr
 }
 
 func (ghc *GitHubContext) PushedAt(sha string) (time.Time, error) {
@@ -484,19 +549,15 @@ func (ghc *GitHubContext) nextChildCommit(sha string) (*Commit, error) {
 }
 
 func (ghc *GitHubContext) Comments() ([]*Comment, error) {
-	if ghc.comments == nil {
-		if err := ghc.loadPagedData(); err != nil {
-			return nil, err
-		}
+	if err := ghc.ensurePagedData(); err != nil {
+		return nil, err
 	}
 	return ghc.comments, nil
 }
 
 func (ghc *GitHubContext) Reviews() ([]*Review, error) {
-	if ghc.reviews == nil {
-		if err := ghc.loadPagedData(); err != nil {
-			return nil, err
-		}
+	if err := ghc.ensurePagedData(); err != nil {
+		return nil, err
 	}
 	return ghc.reviews, nil
 }
@@ -629,13 +690,18 @@ func (ghc *GitHubContext) RepositoryCollaborators(minPermission Permission) ([]*
 	return ghc.collaborators[minPermission], nil
 }
 
-func (ghc *GitHubContext) CollaboratorPermission(user string) (Permission, error) {
+func (ghc *GitHubContext) CollaboratorPermission(user string) (perm Permission, err error) {
 	if ghc.permissions == nil {
 		ghc.permissions = make(map[string]Permission)
 	}
 	if p, ok := ghc.permissions[user]; ok {
 		return p, nil
 	}
+
+	start := time.Now()
+	defer func() {
+		ghc.logTiming("collaborator_permission", start, err)
+	}()
 
 	// Use GraphQL because the v3 API to get collaborator permissions does not
 	// support maintain and triage permissions as of 2021-05-07.
@@ -659,14 +725,14 @@ func (ghc *GitHubContext) CollaboratorPermission(user string) (Permission, error
 
 	// The "query" argument does substring matching, so we might need to
 	// iterate through multiple users before we find the one we're looking for.
-	var perm Permission
 	for {
-		if err := ghc.v4client.Query(ghc.ctx, &q, qvars); err != nil {
+		if err = ghc.v4client.Query(ghc.ctx, &q, qvars); err != nil {
 			return PermissionNone, errors.Wrap(err, "failed to get collaborator permission")
 		}
 		if idx := findUserIndex(user, q.Repository.Collaborators.Nodes); idx >= 0 {
-			p, err := ParsePermission(q.Repository.Collaborators.Edges[idx].Permission)
-			if err != nil {
+			p, parseErr := ParsePermission(q.Repository.Collaborators.Edges[idx].Permission)
+			if parseErr != nil {
+				err = parseErr
 				return PermissionNone, err
 			}
 			perm = p
@@ -691,10 +757,13 @@ func findUserIndex(user string, users []v4Actor) int {
 }
 
 func (ghc *GitHubContext) RequestedReviewers() ([]*Reviewer, error) {
-	if ghc.reviewers == nil {
-		if err := ghc.loadRequestedReviewers(); err != nil {
-			return nil, err
-		}
+	ghc.reviewersOnce.Do(func() {
+		start := time.Now()
+		ghc.reviewersErr = ghc.loadRequestedReviewers()
+		ghc.logTiming("requested_reviewers", start, ghc.reviewersErr)
+	})
+	if ghc.reviewersErr != nil {
+		return nil, ghc.reviewersErr
 	}
 	return ghc.reviewers, nil
 }
@@ -761,40 +830,52 @@ func (ghc *GitHubContext) loadRequestedReviewers() error {
 }
 
 func (ghc *GitHubContext) Teams() (map[string]Permission, error) {
-	if ghc.teams == nil {
-		opt := &github.ListOptions{
-			PerPage: 100,
-		}
-
-		allTeams := make(map[string]Permission)
-		for {
-			teams, resp, err := listTeams(ghc.ctx, ghc.client, ghc.owner, ghc.repo, opt)
-			if err != nil {
-				return nil, errors.Wrapf(err, "failed to list teams page %d", opt.Page)
-			}
-			for _, t := range teams {
-				allTeams[t.GetSlug()] = ParsePermissionMap(t.Permissions)
-			}
-			if resp.NextPage == 0 {
-				break
-			}
-			opt.Page = resp.NextPage
-		}
-		ghc.teams = allTeams
+	ghc.teamsOnce.Do(func() {
+		start := time.Now()
+		ghc.teamsErr = ghc.loadTeams()
+		ghc.logTiming("teams", start, ghc.teamsErr)
+	})
+	if ghc.teamsErr != nil {
+		return nil, ghc.teamsErr
 	}
 	return ghc.teams, nil
 }
 
+func (ghc *GitHubContext) loadTeams() error {
+	opt := &github.ListOptions{
+		PerPage: 100,
+	}
+
+	allTeams := make(map[string]Permission)
+	for {
+		teams, resp, err := listTeams(ghc.ctx, ghc.client, ghc.owner, ghc.repo, opt)
+		if err != nil {
+			return errors.Wrapf(err, "failed to list teams page %d", opt.Page)
+		}
+		for _, t := range teams {
+			allTeams[t.GetSlug()] = ParsePermissionMap(t.Permissions)
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	ghc.teams = allTeams
+	return nil
+}
+
 func (ghc *GitHubContext) LatestStatuses() (map[string]string, error) {
-	if ghc.statuses == nil {
+	ghc.statusesOnce.Do(func() {
 		statuses, err := ghc.getStatuses()
 		if err != nil {
-			return nil, err
+			ghc.statusesErr = err
+			return
 		}
 
 		checkStatuses, err := ghc.getCheckStatuses()
 		if err != nil {
-			return nil, err
+			ghc.statusesErr = err
+			return
 		}
 
 		for k, v := range checkStatuses {
@@ -802,19 +883,30 @@ func (ghc *GitHubContext) LatestStatuses() (map[string]string, error) {
 		}
 
 		ghc.statuses = statuses
+	})
+	if ghc.statusesErr != nil {
+		return nil, ghc.statusesErr
 	}
 
 	return ghc.statuses, nil
 }
 
 func (ghc *GitHubContext) getStatuses() (map[string]string, error) {
+	start := time.Now()
+	var err error
+	defer func() {
+		ghc.logTiming("combined_status", start, err)
+	}()
+
 	opt := &github.ListOptions{
 		PerPage: 100,
 	}
 	// get all pages of results
 	statuses := make(map[string]string)
 	for {
-		combinedStatus, resp, err := ghc.client.Repositories.GetCombinedStatus(ghc.ctx, ghc.owner, ghc.repo, ghc.HeadSHA(), opt)
+		var combinedStatus *github.CombinedStatus
+		var resp *github.Response
+		combinedStatus, resp, err = ghc.client.Repositories.GetCombinedStatus(ghc.ctx, ghc.owner, ghc.repo, ghc.HeadSHA(), opt)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to get statuses for page %d", opt.Page)
 		}
@@ -830,6 +922,12 @@ func (ghc *GitHubContext) getStatuses() (map[string]string, error) {
 }
 
 func (ghc *GitHubContext) getCheckStatuses() (map[string]string, error) {
+	start := time.Now()
+	var err error
+	defer func() {
+		ghc.logTiming("check_runs", start, err)
+	}()
+
 	opt := &github.ListCheckRunsOptions{
 		ListOptions: github.ListOptions{
 			PerPage: 100,
@@ -838,7 +936,9 @@ func (ghc *GitHubContext) getCheckStatuses() (map[string]string, error) {
 	// get all pages of results
 	statuses := make(map[string]string)
 	for {
-		checkRuns, resp, err := ghc.client.Checks.ListCheckRunsForRef(ghc.ctx, ghc.owner, ghc.repo, ghc.HeadSHA(), opt)
+		var checkRuns *github.ListCheckRunsResults
+		var resp *github.Response
+		checkRuns, resp, err = ghc.client.Checks.ListCheckRunsForRef(ghc.ctx, ghc.owner, ghc.repo, ghc.HeadSHA(), opt)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to get check runs for page %d", opt.Page)
 		}
@@ -863,10 +963,18 @@ func (ghc *GitHubContext) getCheckStatuses() (map[string]string, error) {
 }
 
 func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
-	if ghc.workflowRuns != nil {
-		return ghc.workflowRuns, nil
+	ghc.workflowRunsOnce.Do(func() {
+		start := time.Now()
+		ghc.workflowRuns, ghc.workflowRunsErr = ghc.loadWorkflowRuns()
+		ghc.logTiming("workflow_runs", start, ghc.workflowRunsErr)
+	})
+	if ghc.workflowRunsErr != nil {
+		return nil, ghc.workflowRunsErr
 	}
+	return ghc.workflowRuns, nil
+}
 
+func (ghc *GitHubContext) loadWorkflowRuns() (map[string][]string, error) {
 	opt := &github.ListWorkflowRunsOptions{
 		ExcludePullRequests: true,
 		HeadSHA:             ghc.HeadSHA(),
@@ -949,20 +1057,13 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 }
 
 func (ghc *GitHubContext) Labels() ([]string, error) {
-	if ghc.labels == nil {
-		issueLabels, _, err := ghc.client.Issues.ListLabelsByIssue(ghc.ctx, ghc.owner, ghc.repo, ghc.number, &github.ListOptions{
-			Page:    0,
-			PerPage: 100,
-		})
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to list labels")
-		}
-
-		labels := make([]string, len(issueLabels))
-		for i, label := range issueLabels {
-			labels[i] = strings.ToLower(label.GetName())
-		}
-		ghc.labels = labels
+	ghc.labelsOnce.Do(func() {
+		start := time.Now()
+		ghc.labels, ghc.labelsErr = ghc.loadLabels()
+		ghc.logTiming("labels", start, ghc.labelsErr)
+	})
+	if ghc.labelsErr != nil {
+		return nil, ghc.labelsErr
 	}
 	return ghc.labels, nil
 }
@@ -1044,6 +1145,22 @@ func (ghc *GitHubContext) getFileContent(path string) (string, bool, error) {
 		return "", false, err
 	}
 	return content, true, nil
+}
+
+func (ghc *GitHubContext) loadLabels() ([]string, error) {
+	issueLabels, _, err := ghc.client.Issues.ListLabelsByIssue(ghc.ctx, ghc.owner, ghc.repo, ghc.number, &github.ListOptions{
+		Page:    0,
+		PerPage: 100,
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to list labels")
+	}
+
+	labels := make([]string, len(issueLabels))
+	for i, label := range issueLabels {
+		labels[i] = strings.ToLower(label.GetName())
+	}
+	return labels, nil
 }
 
 func (ghc *GitHubContext) loadPagedData() error {
@@ -1156,7 +1273,12 @@ func (ghc *GitHubContext) processCommits(rawCommits []*v4PullRequestCommit) ([]*
 	return commits, nil
 }
 
-func (ghc *GitHubContext) loadPushedAt(sha string) (time.Time, error) {
+func (ghc *GitHubContext) loadPushedAt(sha string) (t time.Time, err error) {
+	start := time.Now()
+	defer func() {
+		ghc.logTiming("pushed_at", start, err)
+	}()
+
 	opt := &github.ListOptions{
 		PerPage: 100,
 	}
@@ -1167,7 +1289,8 @@ func (ghc *GitHubContext) loadPushedAt(sha string) (time.Time, error) {
 	for {
 		statuses, resp, err := ghc.client.Repositories.ListStatuses(ghc.ctx, ghc.owner, ghc.repo, sha, opt)
 		if err != nil {
-			return time.Time{}, errors.Wrapf(err, "failed to list statuses for page %d", opt.Page)
+			err = errors.Wrapf(err, "failed to list statuses for page %d", opt.Page)
+			return time.Time{}, err
 		}
 		if len(statuses) == 0 {
 			return time.Time{}, nil

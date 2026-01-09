@@ -51,6 +51,8 @@ logging:
 #
 # cache:
 #   max_size: "50MB"
+#   details_result_size: 512
+#   details_result_ttl: 30s
 
 # Options for webhook processing workers. Events are dropped if the queue is
 # full. The defaults are shown below.

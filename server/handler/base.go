@@ -35,6 +35,7 @@ type Base struct {
 
 	Installations githubapp.InstallationsService
 	GlobalCache   pull.GlobalCache
+	ResultCache   *DetailsResultCache
 	ConfigFetcher *ConfigFetcher
 	BaseConfig    *baseapp.HTTPConfig
 	PullOpts      *PullEvaluationOptions

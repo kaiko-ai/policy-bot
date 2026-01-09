@@ -23,6 +23,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alexedwards/scs"
 	"github.com/bluekeyes/hatpear"
@@ -54,13 +55,16 @@ type DetailsState struct {
 }
 
 func (h *Details) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
+	requestStart := time.Now()
 	state := h.getStateIfAllowed(w, r)
 	if state == nil {
 		return nil
 	}
+	stateDuration := time.Since(requestStart)
 
 	ctx := state.Ctx
 	evalCtx := state.EvalContext
+	evalCtx.SkipPostStatus = true
 
 	var data struct {
 		BasePath  string
@@ -82,17 +86,60 @@ func (h *Details) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	data.ExpandRequiredReviewers = h.PullOpts.ExpandRequiredReviewers
 	data.PullRequest = state.PullRequest
 
+	cacheKey := ""
+	if h.ResultCache != nil {
+		cacheKey = detailsCacheKey(
+			state.PullRequest.GetBase().GetRepo().GetOwner().GetLogin(),
+			state.PullRequest.GetBase().GetRepo().GetName(),
+			state.PullRequest.GetNumber(),
+			evalCtx.PullContext.HeadSHA(),
+			evalCtx.Config,
+		)
+		if entry, ok := h.ResultCache.Get(cacheKey); ok {
+			data.Result = entry.result
+			data.Error = entry.err
+			data.IsTemporaryError = entry.isTemporary
+			state.Logger.Info().
+				Dur("state_elapsed", stateDuration).
+				Dur("total_elapsed", time.Since(requestStart)).
+				Bool("cache_hit", true).
+				Msg("details_timing")
+			return h.render(w, data)
+		}
+	}
+
+	parseStart := time.Now()
 	evaluator, err := evalCtx.ParseConfig(ctx, common.TriggerAll)
+	parseDuration := time.Since(parseStart)
 	if err != nil {
 		data.Error = err
+		state.Logger.Info().
+			Dur("state_elapsed", stateDuration).
+			Dur("parse_elapsed", parseDuration).
+			Dur("total_elapsed", time.Since(requestStart)).
+			Bool("cache_hit", false).
+			Msg("details_timing")
 		return h.render(w, data)
 	}
 	if evaluator == nil {
 		data.Error = errors.Errorf("Invalid policy at %s: %s", evalCtx.Config.Source, evalCtx.Config.Path)
+		state.Logger.Info().
+			Dur("state_elapsed", stateDuration).
+			Dur("parse_elapsed", parseDuration).
+			Dur("total_elapsed", time.Since(requestStart)).
+			Bool("cache_hit", false).
+			Msg("details_timing")
 		return h.render(w, data)
 	}
 
+	var prefetch prefetchStats
+	if evalCtx.Config.Config != nil {
+		prefetch = buildPrefetchPlan(evalCtx.Config.Config).prefetch(ctx, evalCtx.PullContext, state.Logger)
+	}
+
+	evalStart := time.Now()
 	result, err := evalCtx.EvaluatePolicy(ctx, evaluator)
+	evalDuration := time.Since(evalStart)
 	data.Result = &result
 
 	if err != nil {
@@ -101,6 +148,26 @@ func (h *Details) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 		}
 		data.Error = err
 	}
+
+	if h.ResultCache != nil && cacheKey != "" {
+		h.ResultCache.Set(cacheKey, &detailsCacheEntry{
+			result:      data.Result,
+			err:         data.Error,
+			isTemporary: data.IsTemporaryError,
+			expiresAt:   time.Now().Add(h.ResultCache.ttl),
+		})
+	}
+
+	state.Logger.Info().
+		Dur("state_elapsed", stateDuration).
+		Dur("parse_elapsed", parseDuration).
+		Dur("prefetch_elapsed", prefetch.elapsed).
+		Int("prefetch_ops", prefetch.ops).
+		Int("prefetch_errors", prefetch.errors).
+		Dur("eval_elapsed", evalDuration).
+		Dur("total_elapsed", time.Since(requestStart)).
+		Bool("cache_hit", false).
+		Msg("details_timing")
 
 	// Intentionally skip evalCtx.RunPostEvaluateActions() for details
 	// evaluations to minimize side-effects when viewing policy status. These

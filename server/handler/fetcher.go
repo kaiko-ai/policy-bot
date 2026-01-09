@@ -16,6 +16,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"os"
@@ -24,6 +26,7 @@ import (
 	"github.com/google/go-github/v81/github"
 	"github.com/palantir/go-githubapp/appconfig"
 	"github.com/palantir/policy-bot/policy"
+	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v2"
 )
 
@@ -34,6 +37,8 @@ type FetchedConfig struct {
 
 	Source string
 	Path   string
+
+	ContentHash string
 }
 
 type ConfigFetcher struct {
@@ -44,7 +49,12 @@ func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *
 	retries := 0
 	delay := 1 * time.Second
 	for {
+		start := time.Now()
 		c, err := cf.Loader.LoadConfig(ctx, client, owner, repository, branch)
+		zerolog.Ctx(ctx).Debug().
+			Dur("elapsed", time.Since(start)).
+			Err(err).
+			Msg("policy_config_load")
 		fc := FetchedConfig{
 			Source: c.Source,
 			Path:   c.Path,
@@ -76,6 +86,8 @@ func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *
 			return fc
 		}
 
+		fc.ContentHash = configContentHash(c.Content)
+
 		var pc policy.Config
 		if err := yaml.UnmarshalStrict(c.Content, &pc); err != nil {
 			fc.ParseError = err
@@ -95,4 +107,12 @@ func isServerError(err error) bool {
 		}
 	}
 	return false
+}
+
+func configContentHash(content []byte) string {
+	if len(content) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
