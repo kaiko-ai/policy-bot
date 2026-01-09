@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/palantir/policy-bot/policy/common"
 	"github.com/palantir/policy-bot/policy/predicate"
 	"github.com/palantir/policy-bot/pull"
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 )
 
@@ -110,7 +110,8 @@ func (p *prefetchPlan) applyOptions(opts approval.Options) {
 	if !opts.IsAllowContributor() && !opts.IsAllowNonAuthorContributor() {
 		p.needsCommits = true
 	}
-	if !opts.GetIgnoreCommitsBy().IsZero() {
+	ignoreCommitsBy := opts.GetIgnoreCommitsBy()
+	if !ignoreCommitsBy.IsZero() {
 		p.needsCommits = true
 	}
 }
@@ -285,7 +286,7 @@ func approvalRuleNames(policy approval.Policy) (map[string]struct{}, error) {
 
 func collectPolicyRuleNames(policy interface{}, names map[string]struct{}, depth int) error {
 	if depth > 10 {
-		return fmt.Errorf("reached maximum recursive depth while processing policy")
+		return errors.Errorf("reached maximum recursive depth while processing policy")
 	}
 
 	if ruleName, ok := policy.(string); ok {
@@ -295,20 +296,20 @@ func collectPolicyRuleNames(policy interface{}, names map[string]struct{}, depth
 
 	conjunction, ok := policy.(map[interface{}]interface{})
 	if !ok {
-		return fmt.Errorf("malformed policy, expected string or map, but encountered %T", policy)
+		return errors.Errorf("malformed policy, expected string or map, but encountered %T", policy)
 	}
 
 	if len(conjunction) != 1 {
-		return fmt.Errorf("malformed policy, expected a single conjunction key, got %d", len(conjunction))
+		return errors.Errorf("malformed policy, expected a single conjunction key, got %d", len(conjunction))
 	}
 
 	for _, raw := range conjunction {
 		values, ok := raw.([]interface{})
 		if !ok {
-			return fmt.Errorf("expected list of subconditions, but got %T", raw)
+			return errors.Errorf("expected list of subconditions, but got %T", raw)
 		}
 		if len(values) == 0 {
-			return fmt.Errorf("empty list of subconditions is not allowed")
+			return errors.Errorf("empty list of subconditions is not allowed")
 		}
 
 		for _, subpolicy := range values {

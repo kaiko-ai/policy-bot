@@ -111,18 +111,13 @@ func (h *Details) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	parseStart := time.Now()
 	evaluator, err := evalCtx.ParseConfig(ctx, common.TriggerAll)
 	parseDuration := time.Since(parseStart)
+
 	if err != nil {
 		data.Error = err
-		state.Logger.Info().
-			Dur("state_elapsed", stateDuration).
-			Dur("parse_elapsed", parseDuration).
-			Dur("total_elapsed", time.Since(requestStart)).
-			Bool("cache_hit", false).
-			Msg("details_timing")
-		return h.render(w, data)
-	}
-	if evaluator == nil {
+	} else if evaluator == nil {
 		data.Error = errors.Errorf("Invalid policy at %s: %s", evalCtx.Config.Source, evalCtx.Config.Path)
+	}
+	if data.Error != nil {
 		state.Logger.Info().
 			Dur("state_elapsed", stateDuration).
 			Dur("parse_elapsed", parseDuration).
