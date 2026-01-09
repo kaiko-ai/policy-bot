@@ -150,7 +150,7 @@ func (p *prefetchPlan) applyPredicate(pred predicate.Predicate) {
 		p.needsChangedFiles = true
 	case predicate.HasLabels, *predicate.HasLabels:
 		p.needsLabels = true
-	case predicate.HasStatus, *predicate.HasStatus, predicate.HasSuccessfulStatus, *predicate.HasSuccessfulStatus:
+	case predicate.HasStatus, *predicate.HasStatus:
 		p.needsStatuses = true
 	case predicate.HasWorkflowResult, *predicate.HasWorkflowResult:
 		p.needsWorkflowRuns = true
