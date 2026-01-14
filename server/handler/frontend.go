@@ -34,7 +34,7 @@ import (
 
 const (
 	DefaultTemplatesDir = "templates"
-	DefaultStaticDir    = "static"
+	DefaultStaticDir    = "build/static"
 
 	ManifestFile = "manifest.json"
 )
@@ -42,6 +42,14 @@ const (
 type FilesConfig struct {
 	Static    string `yaml:"static"`
 	Templates string `yaml:"templates"`
+
+	// TemplatesFS is an optional embedded filesystem for templates.
+	// If set, Templates path is interpreted relative to this filesystem.
+	TemplatesFS fs.FS `yaml:"-"`
+
+	// StaticFS is an optional embedded filesystem for static files.
+	// If set, Static path is interpreted relative to this filesystem.
+	StaticFS fs.FS `yaml:"-"`
 }
 
 type Membership struct {
@@ -66,12 +74,23 @@ func LoadTemplates(c *FilesConfig, basePath string, githubURL string) (templatet
 
 	githubURL = strings.TrimSuffix(githubURL, "/")
 
-	manifest, err := loadManifest(staticDir)
+	manifest, err := loadManifestFromConfig(c, staticDir)
 	if err != nil {
 		return nil, err
 	}
 
-	return templatetree.Parse(tmplDir, "*.html.tmpl", func(name string) templatetree.Template[*template.Template] {
+	// Use embedded filesystem if provided, otherwise use OS filesystem
+	var tmplFS fs.FS
+	if c.TemplatesFS != nil {
+		tmplFS, err = fs.Sub(c.TemplatesFS, tmplDir)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create sub filesystem for templates")
+		}
+	} else {
+		tmplFS = os.DirFS(tmplDir)
+	}
+
+	return templatetree.ParseFS(tmplFS, "*.html.tmpl", func(name string) templatetree.Template[*template.Template] {
 		return template.New(name).Funcs(template.FuncMap{
 			"args": func(args ...any) []any {
 				return args
@@ -127,8 +146,16 @@ func LoadTemplates(c *FilesConfig, basePath string, githubURL string) (templatet
 	})
 }
 
-func loadManifest(dir string) (map[string]string, error) {
-	b, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+func loadManifestFromConfig(c *FilesConfig, dir string) (map[string]string, error) {
+	var b []byte
+	var err error
+
+	if c.StaticFS != nil {
+		b, err = fs.ReadFile(c.StaticFS, path.Join(dir, ManifestFile))
+	} else {
+		b, err = os.ReadFile(filepath.Join(dir, ManifestFile))
+	}
+
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -149,9 +176,22 @@ func Static(prefix string, c *FilesConfig) http.Handler {
 		dir = DefaultStaticDir
 	}
 
-	manifest, _ := loadManifest(dir)
+	manifest, _ := loadManifestFromConfig(c, dir)
 
-	h := http.StripPrefix(prefix, http.FileServer(http.Dir(dir)))
+	var staticFS http.FileSystem
+	if c.StaticFS != nil {
+		subFS, err := fs.Sub(c.StaticFS, dir)
+		if err != nil {
+			// Fall back to OS filesystem if sub fails
+			staticFS = http.Dir(dir)
+		} else {
+			staticFS = http.FS(subFS)
+		}
+	} else {
+		staticFS = http.Dir(dir)
+	}
+
+	h := http.StripPrefix(prefix, http.FileServer(staticFS))
 	if manifest == nil {
 		return h
 	}
