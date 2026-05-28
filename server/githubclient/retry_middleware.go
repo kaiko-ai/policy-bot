@@ -15,7 +15,6 @@
 package githubclient
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -45,23 +44,8 @@ type retryOn401Transport struct {
 }
 
 func (t *retryOn401Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Buffer the body before the first attempt so we can replay it on 401.
-	var bodyBytes []byte
-	if req.Body != nil && req.Body != http.NoBody {
-		var err error
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			return nil, err
-		}
-		_ = req.Body.Close()
-		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
-		}
-	}
-
 	resp, err := t.next.RoundTrip(req)
-	if err != nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
 		return resp, err
 	}
 
@@ -72,6 +56,14 @@ func (t *retryOn401Transport) RoundTrip(req *http.Request) (*http.Response, erro
 
 	installationID, ok := InstallationIDFromContext(req.Context())
 	if !ok {
+		return resp, nil
+	}
+
+	// Rebuild the request body for the replay. If the caller didn't provide
+	// GetBody (which net/http sets for byte/string/buffer-backed bodies), we
+	// can't replay; surface the 401 unchanged.
+	getBody := req.GetBody
+	if req.Body != nil && req.Body != http.NoBody && getBody == nil {
 		return resp, nil
 	}
 
@@ -91,14 +83,13 @@ func (t *retryOn401Transport) RoundTrip(req *http.Request) (*http.Response, erro
 		return nil, err
 	}
 
-	// Clone the request with a retry-guard context value, restoring the body.
-	ctx := context.WithValue(req.Context(), retriedKey{}, true)
-	req2 := req.Clone(ctx)
-	if len(bodyBytes) > 0 {
-		req2.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		req2.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+	req2 := req.Clone(context.WithValue(req.Context(), retriedKey{}, true))
+	if getBody != nil {
+		body, err := getBody()
+		if err != nil {
+			return nil, err
 		}
+		req2.Body = body
 	}
 
 	return freshClient.Client().Do(req2)

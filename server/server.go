@@ -363,4 +363,3 @@ func cacheSize(configured, defaultSize int) int {
 	}
 	return defaultSize
 }
-
