@@ -154,7 +154,7 @@ func TestRetryOn401_200PassThrough(t *testing.T) {
 
 	resp, err := hc.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Empty(t, fake.invalidated, "should not have invalidated on 200")
@@ -187,7 +187,7 @@ func TestRetryOn401_RetriesOnce_Success(t *testing.T) {
 
 	resp, err := hc.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, []int64{99}, fake.invalidated)
@@ -219,7 +219,7 @@ func TestRetryOn401_PersistentUnauthorized_NoInfiniteLoop(t *testing.T) {
 
 	resp, err := hc.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	// Exactly 2 calls: first attempt + one retry (guard stops further retries).
@@ -244,7 +244,7 @@ func TestRetryOn401_MissingInstallationID_NoRetry(t *testing.T) {
 
 	resp, err := hc.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Empty(t, fake.invalidated)
@@ -284,7 +284,7 @@ func TestRetryOn401_POSTBodyReplayed(t *testing.T) {
 
 	resp, err := hc.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Len(t, bodies, 2, "expected two attempts")
