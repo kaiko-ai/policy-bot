@@ -60,7 +60,7 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { r
 // a controlled per-installation cache. Call Invalidate to evict a cached client
 // so the next call builds a fresh ghinstallation.Transport (and fetches a new token).
 type InvalidatingClientCreator struct {
-	cfg      githubapp.Config
+	cfg        githubapp.Config
 	middleware []githubapp.ClientMiddleware
 	otherOpts  []githubapp.ClientOption
 
@@ -115,6 +115,24 @@ func (c *InvalidatingClientCreator) Invalidate(installationID int64) {
 	c.mu.Unlock()
 }
 
+// perInstallationDelegate builds a delegate ClientCreator whose middleware
+// stamps every outgoing request with installationID (innermost), then runs the
+// caller's middleware (logging, metrics, tracing), then the retry middleware
+// (outermost) which observes response status codes.
+func (c *InvalidatingClientCreator) perInstallationDelegate(installationID int64) githubapp.ClientCreator {
+	mw := make([]githubapp.ClientMiddleware, 0, len(c.middleware)+1)
+	mw = append(mw, SetInstallationIDMiddleware(installationID))
+	mw = append(mw, c.middleware...)
+	opts := append(append([]githubapp.ClientOption{}, c.otherOpts...), githubapp.WithClientMiddleware(mw...))
+	return githubapp.NewClientCreator(
+		c.cfg.V3APIURL,
+		c.cfg.V4APIURL,
+		c.cfg.App.IntegrationID,
+		[]byte(c.cfg.App.PrivateKey),
+		opts...,
+	)
+}
+
 func (c *InvalidatingClientCreator) NewInstallationClient(installationID int64) (*github.Client, error) {
 	c.mu.Lock()
 	if client, ok := c.v3Cache[installationID]; ok {
@@ -123,29 +141,12 @@ func (c *InvalidatingClientCreator) NewInstallationClient(installationID int64) 
 	}
 	c.mu.Unlock()
 
-	// Build a per-installation delegate. SetInstallationIDMiddleware is the
-	// innermost middleware so it stamps the context first, then the caller's
-	// middleware (logging, metrics, tracing) wraps it, and finally the retry
-	// middleware sits outermost to observe response status codes.
-	mw := make([]githubapp.ClientMiddleware, 0, len(c.middleware)+1)
-	mw = append(mw, SetInstallationIDMiddleware(installationID))
-	mw = append(mw, c.middleware...)
-	opts := append(append([]githubapp.ClientOption{}, c.otherOpts...), githubapp.WithClientMiddleware(mw...))
-	perInstDelegate := githubapp.NewClientCreator(
-		c.cfg.V3APIURL,
-		c.cfg.V4APIURL,
-		c.cfg.App.IntegrationID,
-		[]byte(c.cfg.App.PrivateKey),
-		opts...,
-	)
-
-	client, err := perInstDelegate.NewInstallationClient(installationID)
+	client, err := c.perInstallationDelegate(installationID).NewInstallationClient(installationID)
 	if err != nil {
 		return nil, errors.Wrapf(err, "githubclient: build v3 client for installation %d", installationID)
 	}
 
 	c.mu.Lock()
-	// Double-check: another goroutine may have populated the cache while we built the client.
 	if existing, ok := c.v3Cache[installationID]; ok {
 		c.mu.Unlock()
 		return existing, nil
@@ -164,9 +165,7 @@ func (c *InvalidatingClientCreator) NewInstallationV4Client(installationID int64
 	}
 	c.mu.Unlock()
 
-	// v4 clients don't need the installationID middleware for retry purposes,
-	// but we still build fresh ones per installation so Invalidate works correctly.
-	client, err := c.delegate.NewInstallationV4Client(installationID)
+	client, err := c.perInstallationDelegate(installationID).NewInstallationV4Client(installationID)
 	if err != nil {
 		return nil, errors.Wrapf(err, "githubclient: build v4 client for installation %d", installationID)
 	}
