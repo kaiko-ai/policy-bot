@@ -14,7 +14,9 @@
 
 package server
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestTemplateGitHubAPIPath(t *testing.T) {
 	tests := []struct {
