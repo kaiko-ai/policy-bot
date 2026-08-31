@@ -94,11 +94,119 @@ func TestConfigFetcherDoesNotCacheLoadErrors(t *testing.T) {
 	assert.Equal(t, 2, transport.requestCount())
 }
 
+func TestConfigFetcherBoundsCacheAndEvictsEarliestExpiry(t *testing.T) {
+	transport := &configCountingTransport{}
+	client := githubClientForTransport(t, transport)
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	fetcher := NewConfigFetcher(appconfig.NewLoader([]string{".policy.yml"}))
+	fetcher.Clock = func() time.Time { return now }
+	fetcher.CacheTTL = time.Hour
+	fetcher.MaxCacheEntries = 2
+
+	for _, repository := range []string{"repo-1", "repo-2", "repo-3"} {
+		fc := fetcher.ConfigForRepositoryBranch(context.Background(), client, "owner", repository, "main")
+		require.NoError(t, fc.LoadError)
+		now = now.Add(time.Second)
+	}
+
+	assert.Len(t, fetcher.cache, 2)
+	assert.NotContains(t, fetcher.cache, configCacheKey("owner", "repo-1", "main"))
+
+	fc := fetcher.ConfigForRepositoryBranch(context.Background(), client, "owner", "repo-1", "main")
+	require.NoError(t, fc.LoadError)
+	assert.Equal(t, 4, transport.requestCount(), "the evicted branch should be loaded again")
+}
+
+func TestConfigFetcherSweepsExpiredEntries(t *testing.T) {
+	transport := &configCountingTransport{}
+	client := githubClientForTransport(t, transport)
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	fetcher := NewConfigFetcher(appconfig.NewLoader([]string{".policy.yml"}))
+	fetcher.Clock = func() time.Time { return now }
+	fetcher.CacheTTL = time.Minute
+
+	for _, repository := range []string{"repo-1", "repo-2"} {
+		fc := fetcher.ConfigForRepositoryBranch(context.Background(), client, "owner", repository, "main")
+		require.NoError(t, fc.LoadError)
+	}
+	require.Len(t, fetcher.cache, 2)
+
+	now = now.Add(time.Minute)
+	fc := fetcher.ConfigForRepositoryBranch(context.Background(), client, "owner", "repo-3", "main")
+	require.NoError(t, fc.LoadError)
+	assert.Len(t, fetcher.cache, 1)
+	assert.Contains(t, fetcher.cache, configCacheKey("owner", "repo-3", "main"))
+}
+
+func TestConfigFetcherPanicCleansUpInflightLoad(t *testing.T) {
+	transport := &configPanicOnceTransport{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	client := githubClientForTransport(t, transport)
+	fetcher := NewConfigFetcher(appconfig.NewLoader([]string{".policy.yml"}))
+	key := configCacheKey("owner", "repo", "main")
+	panicked := make(chan struct{})
+
+	go func() {
+		defer close(panicked)
+		defer func() { _ = recover() }()
+		fetcher.ConfigForRepositoryBranch(context.Background(), client, "owner", "repo", "main")
+	}()
+	<-transport.entered
+
+	fetcher.mu.Lock()
+	in := fetcher.inflight[key]
+	fetcher.mu.Unlock()
+	require.NotNil(t, in)
+
+	close(transport.release)
+	select {
+	case <-panicked:
+	case <-time.After(time.Second):
+		t.Fatal("panicking config load did not return")
+	}
+	select {
+	case <-in.done:
+	case <-time.After(time.Second):
+		t.Fatal("panicking config load did not unblock followers")
+	}
+
+	fetcher.mu.Lock()
+	assert.NotContains(t, fetcher.inflight, key)
+	fetcher.mu.Unlock()
+
+	fc := fetcher.ConfigForRepositoryBranch(context.Background(), client, "owner", "repo", "main")
+	require.NoError(t, fc.LoadError)
+}
+
 type configCountingTransport struct {
 	mu       sync.Mutex
 	requests int
 	delay    time.Duration
 	status   int
+}
+
+type configPanicOnceTransport struct {
+	mu       sync.Mutex
+	panicked bool
+	entered  chan struct{}
+	release  chan struct{}
+}
+
+func (t *configPanicOnceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	panicNow := !t.panicked
+	t.panicked = true
+	t.mu.Unlock()
+	if panicNow {
+		close(t.entered)
+		<-t.release
+		panic("test transport panic")
+	}
+
+	content := base64.StdEncoding.EncodeToString([]byte("{}\n"))
+	return jsonResponse(req, http.StatusOK, `{"type":"file","encoding":"base64","content":"`+content+`","name":".policy.yml","path":".policy.yml"}`), nil
 }
 
 func (t *configCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {

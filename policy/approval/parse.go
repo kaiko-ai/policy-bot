@@ -68,7 +68,11 @@ func parsePolicyR(policy interface{}, rules map[string]*Rule, depth int) (common
 	if conjunction, ok := policy.(map[interface{}]interface{}); ok {
 		var ops []string
 		for k := range conjunction {
-			ops = append(ops, k.(string))
+			op, ok := k.(string)
+			if !ok {
+				return nil, errors.Errorf("invalid conjunction key type %T, expected string", k)
+			}
+			ops = append(ops, op)
 		}
 		if len(ops) != 1 {
 			return nil, errors.Errorf("multiple keys found when one was expected: %v", ops)

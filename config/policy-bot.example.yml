@@ -36,7 +36,8 @@ logging:
 #     - "environment:production"
 #
 #
-# Prometheus metrics are always available at the "/api/metrics" endpoint.
+# Prometheus metrics are available at the "/api/metrics" and "/metrics"
+# endpoints when OpenTelemetry is enabled. Both require a bearer token.
 # Uncomment the 'prometheus' block to change the behavior of these metrics.
 #
 # prometheus:
@@ -58,6 +59,9 @@ logging:
 #   enabled: true
 #   # Service name in traces. Can also be set by OTEL_SERVICE_NAME.
 #   service_name: policy-bot
+#   # Required when enabled. Scrapers must send Authorization: Bearer <token>.
+#   # Can also be set by POLICYBOT_OTEL_METRICS_AUTH_TOKEN.
+#   metrics_auth_token: ""
 
 # Options for the GitHub response cache. When the cache reaches max_size, the
 # oldest entries are evicted. Size properties can use any format supported by
@@ -91,7 +95,7 @@ github:
     integration_id: 1
     # A random string used to validate webhooks. Can also be set by the
     # GITHUB_APP_WEBHOOK_SECRET environment variable.
-    webhook_secret: "app_secret"
+    webhook_secret: ""
     # The private key of the GitHub app. Can also be set by the
     # GITHUB_APP_PRIVATE_KEY environment variable.
     private_key: |
@@ -112,7 +116,7 @@ github:
 sessions:
   # A random string used to sign session cookies. Can also be set by the
   # POLICYBOT_SESSIONS_KEY environment variable.
-  key: "secretsessionkey"
+  key: ""
 
 # Options for application behavior. The defaults are shown below.
 #

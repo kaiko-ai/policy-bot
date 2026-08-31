@@ -24,15 +24,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/palantir/policy-bot/server/githubclient"
 	"github.com/prometheus/client_golang/prometheus"
 	gometrics "github.com/rcrowley/go-metrics"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"goji.io"
 )
-
-// installationKey is the context key used by go-githubapp to store installation ID.
-type installationKey struct{}
 
 // routePatternKey is the context key for storing the matched route pattern.
 type routePatternKey struct{}
@@ -56,16 +54,8 @@ type Metrics struct {
 	// Rate limit state per installation
 	rateLimits sync.Map // map[int64]*rateLimitState
 
-	// Event queue metrics
-	eventQueueSize metric.Int64ObservableGauge
-	eventWorkers   metric.Int64ObservableGauge
-	eventAge       metric.Float64Histogram
-	eventDropped   metric.Int64Counter
-
 	// Callbacks for observable gauges
-	eventQueueSizeFunc func() int64
-	eventWorkersFunc   func() int64
-	rateLimitCallback  func() []RateLimitInfo
+	rateLimitCallback func() []RateLimitInfo
 }
 
 // rateLimitState holds rate limit state for a GitHub installation.
@@ -166,43 +156,6 @@ func NewMetrics() (*Metrics, error) {
 		return nil, fmt.Errorf("failed to create github.api.rate_used gauge: %w", err)
 	}
 
-	// Event queue metrics
-	m.eventQueueSize, err = meter.Int64ObservableGauge(
-		"policybot.github.event.queue_size",
-		metric.WithDescription("Number of events in the queue"),
-		metric.WithUnit("{event}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create github.event.queue_size gauge: %w", err)
-	}
-
-	m.eventWorkers, err = meter.Int64ObservableGauge(
-		"policybot.github.event.workers",
-		metric.WithDescription("Number of active event workers"),
-		metric.WithUnit("{worker}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create github.event.workers gauge: %w", err)
-	}
-
-	m.eventAge, err = meter.Float64Histogram(
-		"policybot.github.event.age",
-		metric.WithDescription("Age of events when processed"),
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create github.event.age histogram: %w", err)
-	}
-
-	m.eventDropped, err = meter.Int64Counter(
-		"policybot.github.event.dropped",
-		metric.WithDescription("Number of dropped events"),
-		metric.WithUnit("{event}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create github.event.dropped counter: %w", err)
-	}
-
 	// Register callbacks for observable gauges
 	_, err = meter.RegisterCallback(
 		func(_ context.Context, o metric.Observer) error {
@@ -246,28 +199,6 @@ func NewMetrics() (*Metrics, error) {
 	}
 
 	return m, nil
-}
-
-// RegisterEventQueueCallback registers a callback function for event queue metrics.
-func (m *Metrics) RegisterEventQueueCallback(queueSizeFunc, workersFunc func() int64) error {
-	m.eventQueueSizeFunc = queueSizeFunc
-	m.eventWorkersFunc = workersFunc
-
-	meter := Meter("policybot")
-	_, err := meter.RegisterCallback(
-		func(_ context.Context, o metric.Observer) error {
-			if m.eventQueueSizeFunc != nil {
-				o.ObserveInt64(m.eventQueueSize, m.eventQueueSizeFunc())
-			}
-			if m.eventWorkersFunc != nil {
-				o.ObserveInt64(m.eventWorkers, m.eventWorkersFunc())
-			}
-			return nil
-		},
-		m.eventQueueSize,
-		m.eventWorkers,
-	)
-	return err
 }
 
 // RegisterRateLimitCallback registers a callback for GitHub rate limit metrics.
@@ -332,16 +263,6 @@ func (m *Metrics) RecordGitHubRequest(ctx context.Context, statusCode int, cache
 	m.githubRequests.Add(ctx, 1, attrs)
 }
 
-// RecordEventAge records the age of an event when it's processed.
-func (m *Metrics) RecordEventAge(ctx context.Context, age time.Duration) {
-	m.eventAge.Record(ctx, age.Seconds())
-}
-
-// RecordEventDropped records a dropped event.
-func (m *Metrics) RecordEventDropped(ctx context.Context) {
-	m.eventDropped.Add(ctx, 1)
-}
-
 // statusClass returns the status class (e.g., "2xx", "4xx") for an HTTP status code.
 func statusClass(status int) string {
 	switch {
@@ -358,10 +279,10 @@ func statusClass(status int) string {
 	}
 }
 
-// getInstallationID extracts the installation ID from the request context.
-// Returns 0 if not found.
+// getInstallationID extracts the installation ID stamped on installation clients.
+// App and user clients do not carry an installation ID and return 0.
 func getInstallationID(ctx context.Context) int64 {
-	if id, ok := ctx.Value(installationKey{}).(int64); ok {
+	if id, ok := githubclient.InstallationIDFromContext(ctx); ok {
 		return id
 	}
 	return 0
@@ -517,14 +438,14 @@ func (c *GoMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			)
 		case gometrics.Histogram:
 			snap := m.Snapshot()
-			ch <- prometheus.MustNewConstHistogram(
+			ch <- prometheus.MustNewConstSummary(
 				prometheus.NewDesc(promName, name, nil, nil),
 				uint64(snap.Count()),
 				float64(snap.Sum()),
-				map[float64]uint64{
-					0.5:  uint64(snap.Percentile(0.5)),
-					0.9:  uint64(snap.Percentile(0.9)),
-					0.99: uint64(snap.Percentile(0.99)),
+				map[float64]float64{
+					0.5:  snap.Percentile(0.5),
+					0.9:  snap.Percentile(0.9),
+					0.99: snap.Percentile(0.99),
 				},
 			)
 		case gometrics.Meter:
@@ -541,14 +462,14 @@ func (c *GoMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			)
 		case gometrics.Timer:
 			snap := m.Snapshot()
-			ch <- prometheus.MustNewConstHistogram(
+			ch <- prometheus.MustNewConstSummary(
 				prometheus.NewDesc(promName, name, nil, nil),
 				uint64(snap.Count()),
 				float64(snap.Sum()),
-				map[float64]uint64{
-					0.5:  uint64(snap.Percentile(0.5)),
-					0.9:  uint64(snap.Percentile(0.9)),
-					0.99: uint64(snap.Percentile(0.99)),
+				map[float64]float64{
+					0.5:  snap.Percentile(0.5),
+					0.9:  snap.Percentile(0.9),
+					0.99: snap.Percentile(0.99),
 				},
 			)
 		}

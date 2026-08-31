@@ -1158,6 +1158,9 @@ func (ghc *GitHubContext) getFileContent(path, ref string) (string, bool, error)
 		}
 		return "", false, err
 	}
+	if file == nil {
+		return "", false, errors.Errorf("expected %s to be a file, but found a directory", path)
+	}
 
 	content, err := file.GetContent()
 	if err != nil {

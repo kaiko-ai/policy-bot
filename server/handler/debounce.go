@@ -102,11 +102,19 @@ func (d *StatusDebouncer) Deduplicate(ctx context.Context, key string, trigger c
 		if entry != nil && entry.trailTimer != nil {
 			entry.trailTimer.Stop()
 		}
-		d.entries[key] = &debounceEntry{
+		entry = &debounceEntry{
 			evaluatedAt: now,
 			pending:     trigger,
 			coalesced:   1,
 		}
+		d.entries[key] = entry
+		entry.trailTimer = time.AfterFunc(d.window, func() {
+			d.mu.Lock()
+			if d.entries[key] == entry && entry.trailGen == 0 {
+				delete(d.entries, key)
+			}
+			d.mu.Unlock()
+		})
 		span.SetAttributes(
 			attribute.String(AttrDebounceDecision, DebounceDecisionEvaluate),
 			attribute.String(AttrDebounceReason, reason),

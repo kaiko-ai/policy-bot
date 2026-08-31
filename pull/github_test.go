@@ -813,6 +813,21 @@ func TestCodeownersUsesDefaultBranch(t *testing.T) {
 	assert.Equal(t, 1, codeownersRule.Count, "CODEOWNERS should be fetched from the default branch HEAD")
 }
 
+func TestGetFileContentRejectsDirectory(t *testing.T) {
+	rp := &ResponsePlayer{}
+	rp.AddRule(
+		codeownersMatcher("CODEOWNERS"),
+		"testdata/responses/codeowners_directory.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil).(*GitHubContext)
+	content, exists, err := ctx.getFileContent("CODEOWNERS", "abc123def456789")
+
+	require.EqualError(t, err, "expected CODEOWNERS to be a file, but found a directory")
+	assert.Empty(t, content)
+	assert.False(t, exists)
+}
+
 func TestCodeownersContentCache(t *testing.T) {
 	const (
 		testRepoID  = int64(1234)

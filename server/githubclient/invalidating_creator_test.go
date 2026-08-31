@@ -213,6 +213,30 @@ func TestInvalidate_EvictsBothV3AndV4(t *testing.T) {
 	assert.NotSame(t, v4Before, v4After)
 }
 
+func TestInstallationClientCacheEvictsLeastRecentlyUsedInstallation(t *testing.T) {
+	srv := fakeGitHub(t)
+	defer srv.Close()
+
+	creator, err := githubclient.NewInvalidatingClientCreator(testConfig(t, srv.URL), nil)
+	require.NoError(t, err)
+
+	firstV3, err := creator.NewInstallationClient(1)
+	require.NoError(t, err)
+	firstV4, err := creator.NewInstallationV4Client(1)
+	require.NoError(t, err)
+	for id := int64(2); id <= 65; id++ {
+		_, err = creator.NewInstallationClient(id)
+		require.NoError(t, err)
+	}
+
+	secondV3, err := creator.NewInstallationClient(1)
+	require.NoError(t, err)
+	secondV4, err := creator.NewInstallationV4Client(1)
+	require.NoError(t, err)
+	assert.NotSame(t, firstV3, secondV3)
+	assert.NotSame(t, firstV4, secondV4, "the shared capacity should bound v3 and v4 clients together")
+}
+
 func TestConcurrentNewInstallationClient_ReturnsSameClient(t *testing.T) {
 	srv := fakeGitHub(t)
 	defer srv.Close()
