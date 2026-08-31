@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"testing"
 	"time"
@@ -26,6 +27,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMetricIntegerConversions(t *testing.T) {
+	assert.Equal(t, int64(0), saturatingUint64ToInt64(0))
+	assert.Equal(t, int64(math.MaxInt64), saturatingUint64ToInt64(math.MaxUint64))
+	assert.Equal(t, uint64(0), nonNegativeInt64ToUint64(-1))
+	assert.Equal(t, uint64(math.MaxInt64), nonNegativeInt64ToUint64(math.MaxInt64))
+}
 
 type testRoundTripper func(*http.Request) (*http.Response, error)
 
@@ -40,6 +48,7 @@ func TestGitHubTransportRecordsRateLimitByInstallation(t *testing.T) {
 	transport := metrics.WrapTransport(testRoundTripper(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
+			Body:       http.NoBody,
 			Header: http.Header{
 				"X-Ratelimit-Limit":     []string{"5000"},
 				"X-Ratelimit-Remaining": []string{"4997"},
@@ -51,8 +60,9 @@ func TestGitHubTransportRecordsRateLimitByInstallation(t *testing.T) {
 	ctx := githubclient.ContextWithInstallationID(context.Background(), 42)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.test/repos", nil)
 	require.NoError(t, err)
-	_, err = transport.RoundTrip(req)
+	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 
 	got, ok := metrics.rateLimits.Load(int64(42))
 	require.True(t, ok)

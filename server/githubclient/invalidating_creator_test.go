@@ -122,8 +122,9 @@ func TestSetInstallationIDMiddleware_SetsOnRequest(t *testing.T) {
 	rt := mw(inner)
 
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com", nil)
-	_, err := rt.RoundTrip(req)
+	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 
 	assert.True(t, capturedOK)
 	assert.Equal(t, int64(99), captured)

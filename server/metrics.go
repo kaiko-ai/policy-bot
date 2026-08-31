@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -163,7 +164,7 @@ func NewMetrics() (*Metrics, error) {
 
 			var memStats runtime.MemStats
 			runtime.ReadMemStats(&memStats)
-			o.ObserveInt64(m.memoryUsed, int64(memStats.Alloc))
+			o.ObserveInt64(m.memoryUsed, saturatingUint64ToInt64(memStats.Alloc))
 
 			return nil
 		},
@@ -440,7 +441,7 @@ func (c *GoMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			snap := m.Snapshot()
 			ch <- prometheus.MustNewConstSummary(
 				prometheus.NewDesc(promName, name, nil, nil),
-				uint64(snap.Count()),
+				nonNegativeInt64ToUint64(snap.Count()),
 				float64(snap.Sum()),
 				map[float64]float64{
 					0.5:  snap.Percentile(0.5),
@@ -464,7 +465,7 @@ func (c *GoMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			snap := m.Snapshot()
 			ch <- prometheus.MustNewConstSummary(
 				prometheus.NewDesc(promName, name, nil, nil),
-				uint64(snap.Count()),
+				nonNegativeInt64ToUint64(snap.Count()),
 				float64(snap.Sum()),
 				map[float64]float64{
 					0.5:  snap.Percentile(0.5),
@@ -474,6 +475,22 @@ func (c *GoMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			)
 		}
 	})
+}
+
+func saturatingUint64ToInt64(value uint64) int64 {
+	if value > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	// #nosec G115 -- the range check above proves value fits in an int64.
+	return int64(value)
+}
+
+func nonNegativeInt64ToUint64(value int64) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	// #nosec G115 -- positive int64 values are exactly representable as uint64.
+	return uint64(value)
 }
 
 // promName converts a go-metrics name to a Prometheus-compatible name.

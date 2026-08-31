@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -62,6 +63,17 @@ type Server struct {
 	config       *Config
 	base         *baseapp.Server
 	otelProvider *OTELProvider
+}
+
+func httpCacheMaxSize(configured datasize.ByteSize) (int64, error) {
+	if configured == 0 {
+		return int64(DefaultHTTPCacheSize), nil
+	}
+	if configured > datasize.ByteSize(math.MaxInt64) {
+		return 0, errors.Errorf("cache max_size %s exceeds the supported maximum", configured.HumanReadable())
+	}
+	// #nosec G115 -- the range check above proves configured fits in an int64.
+	return int64(configured), nil
 }
 
 func requireBearerToken(expected string, next http.Handler) http.Handler {
@@ -126,9 +138,9 @@ func New(c *Config) (*Server, error) {
 		return nil, errors.Wrap(err, "failed to initialize OpenTelemetry")
 	}
 
-	maxSize := int64(DefaultHTTPCacheSize)
-	if c.Cache.MaxSize != 0 {
-		maxSize = int64(c.Cache.MaxSize)
+	maxSize, err := httpCacheMaxSize(c.Cache.MaxSize)
+	if err != nil {
+		return nil, err
 	}
 
 	githubTimeout := c.Workers.GithubTimeout

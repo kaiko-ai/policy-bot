@@ -36,6 +36,7 @@ var ServerCmd = &cobra.Command{
 }
 
 func readServerConfig(cfgFile string) (*server.Config, error) {
+	// #nosec G304 -- cfgFile is the operator-provided path to the local server configuration.
 	bytes, err := os.ReadFile(cfgFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.Errorf("server config file does not exist: %s", cfgFile)

@@ -15,12 +15,28 @@
 package server
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestHTTPCacheMaxSize(t *testing.T) {
+	got, err := httpCacheMaxSize(0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(DefaultHTTPCacheSize), got)
+
+	got, err = httpCacheMaxSize(25 * datasize.MB)
+	require.NoError(t, err)
+	assert.Equal(t, int64(25*datasize.MB), got)
+
+	_, err = httpCacheMaxSize(datasize.ByteSize(uint64(math.MaxInt64) + 1))
+	require.ErrorContains(t, err, "exceeds the supported maximum")
+}
 
 func TestRequireBearerToken(t *testing.T) {
 	handler := requireBearerToken("metrics-secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/bluekeyes/templatetree"
 	"github.com/google/go-github/v81/github"
@@ -136,7 +137,13 @@ func main() {
 
 	log.Printf("policy-bot mock UI: http://localhost%s", normalizeAddr(*addr))
 	log.Printf("  static assets from %q (run `npm run build` if missing)", *staticDir)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
+	server := &http.Server{
+		Addr:              *addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

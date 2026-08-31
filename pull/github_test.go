@@ -17,6 +17,7 @@ package pull
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -31,6 +32,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPullRequestNumberToV4(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		number  int
+		wantErr bool
+	}{
+		{name: "minimum", number: 1},
+		{name: "maximum", number: math.MaxInt32},
+		{name: "negative", number: -1, wantErr: true},
+		{name: "too large", number: math.MaxInt32 + 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pullRequestNumberToV4(tc.number)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, githubv4.Int(tc.number), got)
+		})
+	}
+}
 
 func TestChangedFiles(t *testing.T) {
 	rp := &ResponsePlayer{}

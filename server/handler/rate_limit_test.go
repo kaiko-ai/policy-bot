@@ -76,8 +76,10 @@ func TestRateLimitResetTimeRecognizesPrimaryAndSecondaryLimits(t *testing.T) {
 	assert.Equal(t, resetAt, gotReset)
 
 	retryAfter := 7 * time.Second
+	secondaryResponse := rateLimitResponse(http.StatusForbidden)
+	t.Cleanup(func() { require.NoError(t, secondaryResponse.Body.Close()) })
 	secondary := &github.AbuseRateLimitError{
-		Response:   rateLimitResponse(http.StatusForbidden),
+		Response:   secondaryResponse,
 		Message:    "secondary rate limit",
 		RetryAfter: &retryAfter,
 	}
@@ -109,5 +111,6 @@ func rateLimitResponse(status int) *http.Response {
 			URL:    reqURL,
 		},
 		Header: make(http.Header),
+		Body:   http.NoBody,
 	}
 }
