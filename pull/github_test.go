@@ -598,6 +598,14 @@ func TestPushedAt(t *testing.T) {
 		ExactPathMatcher("/repos/testorg/testrepo/commits/e05fcae367230ee709313dd2720da527d178ce43/statuses"),
 		"testdata/responses/repo_statuses_e05fcae367230ee709313dd2720da527d178ce43.yml",
 	)
+	checkSuiteRuleA6F := rp.AddRule(
+		ExactPathMatcher("/repos/testorg/testrepo/commits/a6f3f69b64eaafece5a0d854eb4af11c0d64394c/check-suites"),
+		"testdata/responses/check_suites_none.yml",
+	)
+	checkSuiteRule1FC := rp.AddRule(
+		ExactPathMatcher("/repos/testorg/testrepo/commits/1fc89f1cedf8e3f3ce516ab75b5952295c8ea5e9/check-suites"),
+		"testdata/responses/check_suites_none.yml",
+	)
 
 	expectedTime := time.Date(2020, 9, 30, 17, 30, 0, 0, time.UTC)
 
@@ -632,6 +640,8 @@ func TestPushedAt(t *testing.T) {
 		assert.Equal(t, 1, statusRuleA6F.Count, "incorrect http request count")
 		assert.Equal(t, 1, statusRule1FC.Count, "incorrect http request count")
 		assert.Equal(t, 3, statusRuleE05.Count, "incorrect http request count")
+		assert.Equal(t, 1, checkSuiteRuleA6F.Count, "incorrect http request count")
+		assert.Equal(t, 1, checkSuiteRule1FC.Count, "incorrect http request count")
 	})
 
 	t.Run("fromBatchCache", func(t *testing.T) {
@@ -654,6 +664,27 @@ func TestPushedAt(t *testing.T) {
 		assert.Equal(t, expectedTime, pushedAt, "incorrect pushed at for commit")
 		assert.Equal(t, 3, statusRuleE05.Count, "incorrect http request count")
 	})
+}
+
+func TestPushedAtFromCheckSuite(t *testing.T) {
+	rp := &ResponsePlayer{}
+	sha := "e05fcae367230ee709313dd2720da527d178ce43"
+	statusRule := rp.AddRule(
+		ExactPathMatcher("/repos/testorg/testrepo/commits/"+sha+"/statuses"),
+		"testdata/responses/repo_statuses_none.yml",
+	)
+	checkSuiteRule := rp.AddRule(
+		ExactPathMatcher("/repos/testorg/testrepo/commits/"+sha+"/check-suites"),
+		"testdata/responses/check_suites_paged.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, NewMockGlobalCache())
+	pushedAt, err := ctx.PushedAt(sha)
+	require.NoError(t, err)
+
+	assert.Equal(t, time.Date(2020, 9, 30, 17, 30, 0, 0, time.UTC), pushedAt)
+	assert.Equal(t, 1, statusRule.Count, "incorrect status request count")
+	assert.Equal(t, 2, checkSuiteRule.Count, "incorrect check suite request count")
 }
 
 func TestLatestWorkflowRunsNoRuns(t *testing.T) {
