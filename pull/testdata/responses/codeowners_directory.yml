@@ -1,0 +1,11 @@
+- status: 200
+  body: |
+    [
+      {
+        "name": "nested",
+        "path": "CODEOWNERS/nested",
+        "sha": "abc123",
+        "size": 0,
+        "type": "file"
+      }
+    ]

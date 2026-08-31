@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -41,7 +42,7 @@ type StatusDebouncer struct {
 type debounceEntry struct {
 	evaluatedAt time.Time
 	trailTimer  *time.Timer
-	trailGen    uint64
+	trailGen    int64
 
 	// pending accumulates the union of triggers seen during the current window,
 	// including the leading-edge trigger. The trailing evaluation runs with this
@@ -102,11 +103,19 @@ func (d *StatusDebouncer) Deduplicate(ctx context.Context, key string, trigger c
 		if entry != nil && entry.trailTimer != nil {
 			entry.trailTimer.Stop()
 		}
-		d.entries[key] = &debounceEntry{
+		entry = &debounceEntry{
 			evaluatedAt: now,
 			pending:     trigger,
 			coalesced:   1,
 		}
+		d.entries[key] = entry
+		entry.trailTimer = time.AfterFunc(d.window, func() {
+			d.mu.Lock()
+			if d.entries[key] == entry && entry.trailGen == 0 {
+				delete(d.entries, key)
+			}
+			d.mu.Unlock()
+		})
 		span.SetAttributes(
 			attribute.String(AttrDebounceDecision, DebounceDecisionEvaluate),
 			attribute.String(AttrDebounceReason, reason),
@@ -121,7 +130,9 @@ func (d *StatusDebouncer) Deduplicate(ctx context.Context, key string, trigger c
 		entry.trailTimer.Stop()
 	}
 
-	entry.trailGen++
+	if entry.trailGen < math.MaxInt64 {
+		entry.trailGen++
+	}
 	entry.pending |= trigger
 	entry.coalesced++
 	gen := entry.trailGen
@@ -134,7 +145,7 @@ func (d *StatusDebouncer) Deduplicate(ctx context.Context, key string, trigger c
 		attribute.String(AttrDebounceReason, DebounceReasonWithinWindow),
 		attribute.Bool(AttrDebounceTrailingScheduled, true),
 		attribute.Int64(AttrDebounceTrailingDelayMs, remaining.Milliseconds()),
-		attribute.Int64(AttrDebounceTrailGen, int64(gen)),
+		attribute.Int64(AttrDebounceTrailGen, gen),
 		attribute.String(AttrDebounceAccumulatedTrigger, accumulated.String()),
 		attribute.Int(AttrDebounceCoalesced, coalesced),
 	)

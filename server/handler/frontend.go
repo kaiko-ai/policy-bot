@@ -172,6 +172,7 @@ func LoadTemplates(c *FilesConfig, basePath string, githubURL string) (templatet
 }
 
 func loadManifest(dir string) (map[string]string, error) {
+	// #nosec G304 -- dir is the operator-configured local static asset directory.
 	b, err := os.ReadFile(filepath.Join(dir, ManifestFile))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

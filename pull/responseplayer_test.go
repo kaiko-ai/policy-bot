@@ -72,6 +72,7 @@ func (rp *ResponsePlayer) AddRule(matcher RequestMatcher, file string) *Rule {
 	rule := &Rule{Matcher: matcher}
 	rp.Rules = append(rp.Rules, rule)
 
+	// #nosec G304 -- callers provide repository-controlled test fixture paths.
 	d, err := os.ReadFile(file)
 	if err != nil {
 		rule.err = errors.Wrapf(err, "failed to read response file: %s", file)

@@ -251,11 +251,6 @@ func (r *Rule) isApprovedByActors(ctx context.Context, prctx pull.Context, candi
 		}
 	}
 
-	// If codeowners is enabled, delegate to codeowner group logic
-	if r.Requires.Actors.Codeowners {
-		return r.isApprovedByCodeownerGroups(ctx, prctx, candidates, banned)
-	}
-
 	// filter real approvers using banned status and required membership
 	var approvers []*common.Candidate
 	for _, c := range candidates {
@@ -277,7 +272,20 @@ func (r *Rule) isApprovedByActors(ctx context.Context, prctx pull.Context, candi
 	}
 
 	log.Debug().Msgf("found %d/%d required approvers", len(approvers), r.Requires.Count)
-	return len(approvers) >= r.Requires.Count, approvers, nil, nil
+	actorsApproved := len(approvers) >= r.Requires.Count
+
+	// Codeowner group coverage is an additional requirement. It must not bypass
+	// the configured actor filters or approval count when CODEOWNERS is missing
+	// or none of the changed files have owners.
+	if r.Requires.Actors.Codeowners {
+		groupsApproved, _, ownershipGroups, err := r.isApprovedByCodeownerGroups(ctx, prctx, candidates, banned)
+		if err != nil {
+			return false, nil, nil, err
+		}
+		return actorsApproved && groupsApproved, approvers, ownershipGroups, nil
+	}
+
+	return actorsApproved, approvers, nil, nil
 }
 
 func (r *Rule) isApprovedByConditions(ctx context.Context, prctx pull.Context) (bool, []*common.PredicateResult, error) {

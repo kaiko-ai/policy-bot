@@ -1525,6 +1525,72 @@ func TestCodeownerGroupApproval(t *testing.T) {
 		assert.Empty(t, result.OwnershipGroups)
 	})
 
+	t.Run("codeownersDoNotBypassApprovalCount", func(t *testing.T) {
+		prctx := &pulltest.Context{
+			AuthorValue: "author",
+			ReviewsValue: []*pull.Review{
+				{Author: pull.NewAuthor("owner"), State: pull.ReviewApproved, CreatedAt: now},
+			},
+			CommitsValue: []*pull.Commit{
+				{SHA: "abc123", Author: "author"},
+			},
+			HeadSHAValue: "abc123",
+			CodeownersValue: &pull.CodeownersResult{
+				Owners: map[string][]string{
+					"file.go": {"@owner"},
+				},
+			},
+		}
+
+		r := &Rule{
+			Options: Options{Methods: DefaultMethods()},
+			Requires: Requires{
+				Count:  2,
+				Actors: common.Actors{Codeowners: true},
+			},
+		}
+
+		candidates, _, err := r.FilteredCandidates(ctx, prctx)
+		require.NoError(t, err)
+
+		approved, result, err := r.IsApproved(ctx, prctx, candidates)
+		require.NoError(t, err)
+		assert.False(t, approved)
+		assert.False(t, result.ActorsApproved)
+		assert.Len(t, result.Approvers, 1)
+		require.Len(t, result.OwnershipGroups, 1)
+		assert.True(t, result.OwnershipGroups[0].Satisfied)
+	})
+
+	for name, codeownersResult := range map[string]*pull.CodeownersResult{
+		"missingCodeownersFileWithRequiredCount": nil,
+		"unownedFilesWithRequiredCount":          {Owners: map[string][]string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			prctx := &pulltest.Context{
+				AuthorValue:     "author",
+				CommitsValue:    []*pull.Commit{{SHA: "abc123", Author: "author"}},
+				HeadSHAValue:    "abc123",
+				CodeownersValue: codeownersResult,
+			}
+			r := &Rule{
+				Options: Options{Methods: DefaultMethods()},
+				Requires: Requires{
+					Count:  2,
+					Actors: common.Actors{Codeowners: true},
+				},
+			}
+
+			candidates, _, err := r.FilteredCandidates(ctx, prctx)
+			require.NoError(t, err)
+			approved, result, err := r.IsApproved(ctx, prctx, candidates)
+			require.NoError(t, err)
+			assert.False(t, approved)
+			assert.False(t, result.ActorsApproved)
+			assert.Empty(t, result.Approvers)
+		})
+	}
+
 	t.Run("authorCannotApproveOwnGroup", func(t *testing.T) {
 		// Author is a codeowner but shouldn't be able to approve (default behavior)
 		prctx := &pulltest.Context{

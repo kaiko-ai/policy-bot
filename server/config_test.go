@@ -42,3 +42,58 @@ func TestParseConfigStatusDebounceWindowDefault(t *testing.T) {
 
 	assert.Equal(t, handler.DefaultDebounceWindow, cfg.Options.StatusDebounceWindow)
 }
+
+func TestValidateSecrets(t *testing.T) {
+	tests := map[string]struct {
+		configure func(*Config)
+		wantErr   string
+	}{
+		"valid": {configure: func(*Config) {}},
+		"missing webhook secret": {
+			configure: func(c *Config) { c.Github.App.WebhookSecret = "" },
+			wantErr:   "webhook secret",
+		},
+		"example webhook secret": {
+			configure: func(c *Config) { c.Github.App.WebhookSecret = "app_secret" },
+			wantErr:   "webhook secret",
+		},
+		"missing sessions key": {
+			configure: func(c *Config) { c.Sessions.Key = "" },
+			wantErr:   "sessions key",
+		},
+		"example sessions key": {
+			configure: func(c *Config) { c.Sessions.Key = "secretsessionkey" },
+			wantErr:   "sessions key",
+		},
+		"missing metrics token": {
+			configure: func(c *Config) {
+				c.OTEL.Enabled = true
+				c.OTEL.MetricsAuthToken = ""
+			},
+			wantErr: "metrics_auth_token",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := &Config{}
+			cfg.Github.App.WebhookSecret = "webhook-secret"
+			cfg.Sessions.Key = "session-key"
+			tt.configure(cfg)
+
+			err := cfg.validateSecrets()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestMetricsAuthTokenFromEnv(t *testing.T) {
+	t.Setenv("TEST_POLICYBOT_OTEL_METRICS_AUTH_TOKEN", "metrics-secret")
+	var cfg OTELConfig
+	cfg.SetValuesFromEnv("TEST_POLICYBOT_")
+	assert.Equal(t, "metrics-secret", cfg.MetricsAuthToken)
+}

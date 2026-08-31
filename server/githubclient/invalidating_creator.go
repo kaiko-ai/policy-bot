@@ -15,6 +15,7 @@
 package githubclient
 
 import (
+	"container/list"
 	"context"
 	"net/http"
 	"sync"
@@ -67,9 +68,18 @@ type InvalidatingClientCreator struct {
 	// delegate handles non-installation methods (app client, token clients).
 	delegate githubapp.ClientCreator
 
-	mu      sync.Mutex
-	v3Cache map[int64]*github.Client
-	v4Cache map[int64]*githubv4.Client
+	mu       sync.Mutex
+	v3Cache  map[int64]*github.Client
+	v4Cache  map[int64]*githubv4.Client
+	lru      *list.List
+	lruByKey map[installationClientKey]*list.Element
+}
+
+const maxCachedInstallationClients = 64
+
+type installationClientKey struct {
+	installationID int64
+	v4             bool
 }
 
 var _ githubapp.ClientCreator = (*InvalidatingClientCreator)(nil)
@@ -89,6 +99,8 @@ func NewInvalidatingClientCreator(c githubapp.Config, middleware []githubapp.Cli
 		otherOpts: opts,
 		v3Cache:   make(map[int64]*github.Client),
 		v4Cache:   make(map[int64]*githubv4.Client),
+		lru:       list.New(),
+		lruByKey:  make(map[installationClientKey]*list.Element),
 	}
 
 	// Append the retry middleware as the outermost layer. It closes over icc,
@@ -112,7 +124,35 @@ func (c *InvalidatingClientCreator) Invalidate(installationID int64) {
 	c.mu.Lock()
 	delete(c.v3Cache, installationID)
 	delete(c.v4Cache, installationID)
+	for _, key := range []installationClientKey{{installationID: installationID}, {installationID: installationID, v4: true}} {
+		if elem := c.lruByKey[key]; elem != nil {
+			c.lru.Remove(elem)
+			delete(c.lruByKey, key)
+		}
+	}
 	c.mu.Unlock()
+}
+
+func (c *InvalidatingClientCreator) touchLocked(key installationClientKey) {
+	if elem := c.lruByKey[key]; elem != nil {
+		c.lru.MoveToFront(elem)
+		return
+	}
+
+	c.lruByKey[key] = c.lru.PushFront(key)
+	if c.lru.Len() <= maxCachedInstallationClients {
+		return
+	}
+
+	elem := c.lru.Back()
+	evictedKey := elem.Value.(installationClientKey)
+	c.lru.Remove(elem)
+	delete(c.lruByKey, evictedKey)
+	if evictedKey.v4 {
+		delete(c.v4Cache, evictedKey.installationID)
+	} else {
+		delete(c.v3Cache, evictedKey.installationID)
+	}
 }
 
 // perInstallationDelegate builds a delegate ClientCreator whose middleware
@@ -136,6 +176,7 @@ func (c *InvalidatingClientCreator) perInstallationDelegate(installationID int64
 func (c *InvalidatingClientCreator) NewInstallationClient(installationID int64) (*github.Client, error) {
 	c.mu.Lock()
 	if client, ok := c.v3Cache[installationID]; ok {
+		c.touchLocked(installationClientKey{installationID: installationID})
 		c.mu.Unlock()
 		return client, nil
 	}
@@ -148,10 +189,12 @@ func (c *InvalidatingClientCreator) NewInstallationClient(installationID int64) 
 
 	c.mu.Lock()
 	if existing, ok := c.v3Cache[installationID]; ok {
+		c.touchLocked(installationClientKey{installationID: installationID})
 		c.mu.Unlock()
 		return existing, nil
 	}
 	c.v3Cache[installationID] = client
+	c.touchLocked(installationClientKey{installationID: installationID})
 	c.mu.Unlock()
 
 	return client, nil
@@ -160,6 +203,7 @@ func (c *InvalidatingClientCreator) NewInstallationClient(installationID int64) 
 func (c *InvalidatingClientCreator) NewInstallationV4Client(installationID int64) (*githubv4.Client, error) {
 	c.mu.Lock()
 	if client, ok := c.v4Cache[installationID]; ok {
+		c.touchLocked(installationClientKey{installationID: installationID, v4: true})
 		c.mu.Unlock()
 		return client, nil
 	}
@@ -172,10 +216,12 @@ func (c *InvalidatingClientCreator) NewInstallationV4Client(installationID int64
 
 	c.mu.Lock()
 	if existing, ok := c.v4Cache[installationID]; ok {
+		c.touchLocked(installationClientKey{installationID: installationID, v4: true})
 		c.mu.Unlock()
 		return existing, nil
 	}
 	c.v4Cache[installationID] = client
+	c.touchLocked(installationClientKey{installationID: installationID, v4: true})
 	c.mu.Unlock()
 
 	return client, nil

@@ -40,14 +40,20 @@ type FetchedConfig struct {
 type ConfigFetcher struct {
 	Loader   *appconfig.Loader
 	CacheTTL time.Duration
-	Clock    func() time.Time
+	// MaxCacheEntries bounds cached repository/branch configurations. Values
+	// less than one disable caching.
+	MaxCacheEntries int
+	Clock           func() time.Time
 
 	mu       sync.Mutex
 	cache    map[string]configCacheEntry
 	inflight map[string]*configInflight
 }
 
-const DefaultConfigCacheTTL = 30 * time.Second
+const (
+	DefaultConfigCacheTTL        = 30 * time.Second
+	DefaultConfigMaxCacheEntries = 64
+)
 
 type configCacheEntry struct {
 	config    FetchedConfig
@@ -61,13 +67,14 @@ type configInflight struct {
 
 func NewConfigFetcher(loader *appconfig.Loader) *ConfigFetcher {
 	return &ConfigFetcher{
-		Loader:   loader,
-		CacheTTL: DefaultConfigCacheTTL,
+		Loader:          loader,
+		CacheTTL:        DefaultConfigCacheTTL,
+		MaxCacheEntries: DefaultConfigMaxCacheEntries,
 	}
 }
 
 func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *github.Client, owner, repository, branch string) FetchedConfig {
-	if cf.CacheTTL <= 0 {
+	if cf.CacheTTL <= 0 || cf.MaxCacheEntries <= 0 {
 		return cf.loadConfigForRepositoryBranch(ctx, client, owner, repository, branch)
 	}
 
@@ -76,12 +83,10 @@ func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *
 
 	cf.mu.Lock()
 	if cf.cache != nil {
+		cf.deleteExpiredLocked(now)
 		if entry, ok := cf.cache[key]; ok {
-			if now.Before(entry.expiresAt) {
-				cf.mu.Unlock()
-				return cloneFetchedConfig(entry.config)
-			}
-			delete(cf.cache, key)
+			cf.mu.Unlock()
+			return cloneFetchedConfig(entry.config)
 		}
 	}
 	if cf.inflight != nil {
@@ -104,25 +109,55 @@ func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *
 	in := &configInflight{done: make(chan struct{})}
 	cf.inflight[key] = in
 	cf.mu.Unlock()
+	defer close(in.done)
+	defer func() {
+		cf.mu.Lock()
+		delete(cf.inflight, key)
+		cf.mu.Unlock()
+	}()
 
 	fc := cf.loadConfigForRepositoryBranch(ctx, client, owner, repository, branch)
 
 	cf.mu.Lock()
 	in.config = cloneFetchedConfig(fc)
-	delete(cf.inflight, key)
 	if shouldCacheFetchedConfig(fc) {
 		if cf.cache == nil {
 			cf.cache = make(map[string]configCacheEntry)
+		}
+		cf.deleteExpiredLocked(cf.now())
+		if _, exists := cf.cache[key]; !exists && len(cf.cache) >= cf.MaxCacheEntries {
+			cf.deleteEarliestExpiringLocked()
 		}
 		cf.cache[key] = configCacheEntry{
 			config:    cloneFetchedConfig(fc),
 			expiresAt: cf.now().Add(cf.CacheTTL),
 		}
 	}
-	close(in.done)
 	cf.mu.Unlock()
 
 	return fc
+}
+
+func (cf *ConfigFetcher) deleteExpiredLocked(now time.Time) {
+	for key, entry := range cf.cache {
+		if !now.Before(entry.expiresAt) {
+			delete(cf.cache, key)
+		}
+	}
+}
+
+func (cf *ConfigFetcher) deleteEarliestExpiringLocked() {
+	var earliestKey string
+	var earliest time.Time
+	for key, entry := range cf.cache {
+		if earliestKey == "" || entry.expiresAt.Before(earliest) {
+			earliestKey = key
+			earliest = entry.expiresAt
+		}
+	}
+	if earliestKey != "" {
+		delete(cf.cache, earliestKey)
+	}
 }
 
 func (cf *ConfigFetcher) loadConfigForRepositoryBranch(ctx context.Context, client *github.Client, owner, repository, branch string) FetchedConfig {

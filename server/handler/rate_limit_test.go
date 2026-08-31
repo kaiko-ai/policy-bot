@@ -76,8 +76,10 @@ func TestRateLimitResetTimeRecognizesPrimaryAndSecondaryLimits(t *testing.T) {
 	assert.Equal(t, resetAt, gotReset)
 
 	retryAfter := 7 * time.Second
+	secondaryResponse := rateLimitResponse(http.StatusForbidden)
+	t.Cleanup(func() { require.NoError(t, secondaryResponse.Body.Close()) })
 	secondary := &github.AbuseRateLimitError{
-		Response:   rateLimitResponse(http.StatusForbidden),
+		Response:   &secondaryResponse,
 		Message:    "secondary rate limit",
 		RetryAfter: &retryAfter,
 	}
@@ -88,20 +90,21 @@ func TestRateLimitResetTimeRecognizesPrimaryAndSecondaryLimits(t *testing.T) {
 }
 
 func newRateLimitError(resetAt time.Time) *github.RateLimitError {
+	response := rateLimitResponse(http.StatusForbidden)
 	return &github.RateLimitError{
 		Rate: github.Rate{
 			Limit:     9600,
 			Remaining: 0,
 			Reset:     github.Timestamp{Time: resetAt},
 		},
-		Response: rateLimitResponse(http.StatusForbidden),
+		Response: &response,
 		Message:  "API rate limit exceeded",
 	}
 }
 
-func rateLimitResponse(status int) *http.Response {
+func rateLimitResponse(status int) http.Response {
 	reqURL, _ := url.Parse("https://api.github.com/repos/testowner/testrepo/contents/.policy.yml?ref=main")
-	return &http.Response{
+	return http.Response{
 		Status:     http.StatusText(status),
 		StatusCode: status,
 		Request: &http.Request{
@@ -109,5 +112,6 @@ func rateLimitResponse(status int) *http.Response {
 			URL:    reqURL,
 		},
 		Header: make(http.Header),
+		Body:   http.NoBody,
 	}
 }

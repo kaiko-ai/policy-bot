@@ -36,6 +36,16 @@ func TestStatusDebouncer_FirstEventEvaluatesImmediately(t *testing.T) {
 	assert.True(t, result, "first event should evaluate immediately")
 }
 
+func TestStatusDebouncer_FirstEventEntryExpires(t *testing.T) {
+	d := NewStatusDebouncer(20 * time.Millisecond)
+	assert.True(t, d.Deduplicate(context.Background(), "key1", common.TriggerCommit, noopTrail))
+	require.Eventually(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return len(d.entries) == 0
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestStatusDebouncer_SubsequentEventsAreSkipped(t *testing.T) {
 	d := NewStatusDebouncer(100 * time.Millisecond)
 

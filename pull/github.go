@@ -17,6 +17,7 @@ package pull
 import (
 	"context"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -82,7 +83,7 @@ func (loc Locator) IsComplete() bool {
 }
 
 // toV4 returns a v4PullRequest, loading data from the API if the locator is not complete.
-func (loc Locator) toV4(ctx context.Context, client *githubv4.Client) (*v4PullRequest, error) {
+func (loc Locator) toV4(ctx context.Context, client *githubv4.Client, number githubv4.Int) (*v4PullRequest, error) {
 	if !loc.IsComplete() {
 		var q struct {
 			Repository struct {
@@ -92,7 +93,7 @@ func (loc Locator) toV4(ctx context.Context, client *githubv4.Client) (*v4PullRe
 		qvars := map[string]any{
 			"owner":  githubv4.String(loc.Owner),
 			"name":   githubv4.String(loc.Repo),
-			"number": githubv4.Int(loc.Number),
+			"number": number,
 		}
 		if err := client.Query(ctx, &q, qvars); err != nil {
 			return nil, errors.Wrap(err, "failed to load pull request details")
@@ -130,10 +131,11 @@ type GitHubContext struct {
 
 	evalTimestamp time.Time
 
-	owner  string
-	repo   string
-	number int
-	pr     *v4PullRequest
+	owner    string
+	repo     string
+	number   int
+	v4Number githubv4.Int
+	pr       *v4PullRequest
 
 	// cached fields
 	files                      []*File
@@ -176,7 +178,12 @@ func NewGitHubContext(
 		panic("pull request object does not contain full identifying information")
 	}
 
-	pr, err := loc.toV4(ctx, v4client)
+	v4Number, err := pullRequestNumberToV4(loc.Number)
+	if err != nil {
+		return nil, err
+	}
+
+	pr, err := loc.toV4(ctx, v4client, v4Number)
 	if err != nil {
 		return nil, err
 	}
@@ -191,11 +198,20 @@ func NewGitHubContext(
 
 		evalTimestamp: time.Now(),
 
-		owner:  loc.Owner,
-		repo:   loc.Repo,
-		number: loc.Number,
-		pr:     pr,
+		owner:    loc.Owner,
+		repo:     loc.Repo,
+		number:   loc.Number,
+		v4Number: v4Number,
+		pr:       pr,
 	}, nil
+}
+
+func pullRequestNumberToV4(number int) (githubv4.Int, error) {
+	if number < 1 || number > math.MaxInt32 {
+		return 0, errors.Errorf("pull request number %d is outside the GitHub GraphQL Int range", number)
+	}
+	// #nosec G115 -- the range check above proves number fits in GitHub's signed 32-bit scalar.
+	return githubv4.Int(number), nil
 }
 
 // Prefetch starts background fetches for commonly needed data.
@@ -282,7 +298,7 @@ func (ghc *GitHubContext) Body() (*Body, error) {
 	qvars := map[string]any{
 		"owner":  githubv4.String(ghc.owner),
 		"name":   githubv4.String(ghc.repo),
-		"number": githubv4.Int(ghc.number),
+		"number": ghc.v4Number,
 	}
 	if err := ghc.v4client.Query(ghc.ctx, &q, qvars); err != nil {
 		return nil, errors.Wrap(err, "failed to load pull request details")
@@ -757,7 +773,7 @@ func (ghc *GitHubContext) loadRequestedReviewers() error {
 	qvars := map[string]any{
 		"owner":  githubv4.String(ghc.owner),
 		"name":   githubv4.String(ghc.repo),
-		"number": githubv4.Int(ghc.number),
+		"number": ghc.v4Number,
 
 		"requestCursor":  (*githubv4.String)(nil),
 		"timelineCursor": (*githubv4.String)(nil),
@@ -1158,6 +1174,9 @@ func (ghc *GitHubContext) getFileContent(path, ref string) (string, bool, error)
 		}
 		return "", false, err
 	}
+	if file == nil {
+		return "", false, errors.Errorf("expected %s to be a file, but found a directory", path)
+	}
 
 	content, err := file.GetContent()
 	if err != nil {
@@ -1182,7 +1201,7 @@ func (ghc *GitHubContext) loadPagedDataOnce() error {
 	qvars := map[string]any{
 		"owner":  githubv4.String(ghc.owner),
 		"name":   githubv4.String(ghc.repo),
-		"number": githubv4.Int(ghc.number),
+		"number": ghc.v4Number,
 
 		"commitCursor":  (*githubv4.String)(nil),
 		"commentCursor": (*githubv4.String)(nil),

@@ -17,6 +17,7 @@ package pull
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -31,6 +32,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPullRequestNumberToV4(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		number  int
+		want    githubv4.Int
+		wantErr bool
+	}{
+		{name: "minimum", number: 1, want: 1},
+		{name: "maximum", number: math.MaxInt32, want: math.MaxInt32},
+		{name: "negative", number: -1, wantErr: true},
+		{name: "too large", number: math.MaxInt32 + 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pullRequestNumberToV4(tc.number)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
 
 func TestChangedFiles(t *testing.T) {
 	rp := &ResponsePlayer{}
@@ -811,6 +836,21 @@ func TestCodeownersUsesDefaultBranch(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.Equal(t, 1, codeownersRule.Count, "CODEOWNERS should be fetched from the default branch HEAD")
+}
+
+func TestGetFileContentRejectsDirectory(t *testing.T) {
+	rp := &ResponsePlayer{}
+	rp.AddRule(
+		codeownersMatcher("CODEOWNERS"),
+		"testdata/responses/codeowners_directory.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil).(*GitHubContext)
+	content, exists, err := ctx.getFileContent("CODEOWNERS", "abc123def456789")
+
+	require.EqualError(t, err, "expected CODEOWNERS to be a file, but found a directory")
+	assert.Empty(t, content)
+	assert.False(t, exists)
 }
 
 func TestCodeownersContentCache(t *testing.T) {

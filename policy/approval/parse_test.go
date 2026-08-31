@@ -212,6 +212,19 @@ func TestParsePolicyError_multikey(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParsePolicyError_nonStringKey(t *testing.T) {
+	policy := `
+- 1:
+  - rule1
+`
+	rules := `
+- name: rule1
+`
+
+	_, err := loadAndParsePolicy(t, policy, rules)
+	require.EqualError(t, err, "failed to parse subpolicies for 'and': invalid conjunction key type int, expected string")
+}
+
 func TestParsePolicyError_recursiveDepth(t *testing.T) {
 	// Recursive depth 10 is allowed
 	policy := `
