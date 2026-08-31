@@ -60,6 +60,7 @@ func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result
 	// Seed the random source with the PR creation time so that repeated
 	// evaluations produce the same set of reviewers. This is required to avoid
 	// duplicate requests on later evaluations.
+	// #nosec G404 -- stable reviewer selection avoids duplicate requests; this is not used for security-sensitive randomness.
 	r := rand.New(rand.NewSource(ec.PullContext.CreatedAt().UnixNano()))
 	selection, err := reviewer.SelectReviewers(ctx, ec.PullContext, reqs, r)
 	if err != nil {

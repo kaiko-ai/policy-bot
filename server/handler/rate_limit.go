@@ -153,6 +153,7 @@ func (d *RateLimitDeferrer) jitterDelay() time.Duration {
 	if d.maxJitter <= 0 {
 		return 0
 	}
+	// #nosec G404 -- retry jitter does not require cryptographically secure randomness.
 	return time.Duration(rand.Int63n(int64(d.maxJitter)))
 }
 

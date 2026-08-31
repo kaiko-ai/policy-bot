@@ -248,7 +248,7 @@ func TestSelectRequestedReviewers(t *testing.T) {
 }
 
 func TestSelectReviewers_UserPermission(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
+	r := rand.New(rand.NewSource(42)) // #nosec G404 -- deterministic PR reviewer selection is required for this test.
 	results := []*common.Result{
 		{
 			Name:   "user-permissions",
@@ -276,7 +276,7 @@ func TestSelectReviewers_UserPermission(t *testing.T) {
 }
 
 func TestSelectReviewers_TeamPermission(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
+	r := rand.New(rand.NewSource(42)) // #nosec G404 -- deterministic PR reviewer selection is required for this test.
 	results := []*common.Result{
 		{
 			Name:   "team-permissions",
@@ -301,7 +301,7 @@ func TestSelectReviewers_TeamPermission(t *testing.T) {
 }
 
 func TestSelectReviewers_TeamMembers(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
+	r := rand.New(rand.NewSource(42)) // #nosec G404 -- deterministic PR reviewer selection is required for this test.
 	results := []*common.Result{
 		{
 			Name:   "team-users",
@@ -324,7 +324,7 @@ func TestSelectReviewers_TeamMembers(t *testing.T) {
 }
 
 func TestSelectReviewers_Team(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
+	r := rand.New(rand.NewSource(42)) // #nosec G404 -- deterministic PR reviewer selection is required for this test.
 	results := []*common.Result{
 		{
 			Name:   "Team",
@@ -347,7 +347,7 @@ func TestSelectReviewers_Team(t *testing.T) {
 }
 
 func TestSelectReviewers_TeamNotCollaborator(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
+	r := rand.New(rand.NewSource(42)) // #nosec G404 -- deterministic PR reviewer selection is required for this test.
 	results := []*common.Result{
 		{
 			Name:   "not-collaborators",
@@ -369,7 +369,7 @@ func TestSelectReviewers_TeamNotCollaborator(t *testing.T) {
 }
 
 func TestSelectReviewers_Org(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
+	r := rand.New(rand.NewSource(42)) // #nosec G404 -- deterministic PR reviewer selection is required for this test.
 	results := []*common.Result{
 		{
 			Name:   "org",

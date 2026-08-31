@@ -37,10 +37,11 @@ func TestPullRequestNumberToV4(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		number  int
+		want    githubv4.Int
 		wantErr bool
 	}{
-		{name: "minimum", number: 1},
-		{name: "maximum", number: math.MaxInt32},
+		{name: "minimum", number: 1, want: 1},
+		{name: "maximum", number: math.MaxInt32, want: math.MaxInt32},
 		{name: "negative", number: -1, wantErr: true},
 		{name: "too large", number: math.MaxInt32 + 1, wantErr: true},
 	} {
@@ -51,7 +52,7 @@ func TestPullRequestNumberToV4(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, githubv4.Int(tc.number), got)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

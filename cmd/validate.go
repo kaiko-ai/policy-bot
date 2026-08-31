@@ -37,6 +37,7 @@ var ValidationCmd = &cobra.Command{
 }
 
 func validationCmd(cmd *cobra.Command, args []string) error {
+	// #nosec G304 -- validateCmdConfig.Path is the operator-selected local policy file.
 	policyData, err := os.ReadFile(validateCmdConfig.Path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return errors.Errorf("policy file does not exist: %s", validateCmdConfig.Path)
