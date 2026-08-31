@@ -82,6 +82,7 @@ func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result
 	//
 	// Use the global random source instead of the per-PR source so that two
 	// events for the same PR don't wait for the same amount of time.
+	// #nosec G404 -- request staggering jitter does not require cryptographically secure randomness.
 	delay := time.Duration(rand.Intn(maxDelayMillis)) * time.Millisecond
 	logger.Debug().Msgf("Waiting for %s to spread out reviewer processing", delay)
 	time.Sleep(delay)
