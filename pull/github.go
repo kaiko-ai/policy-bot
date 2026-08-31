@@ -1274,13 +1274,37 @@ func (ghc *GitHubContext) loadPushedAt(sha string) (time.Time, error) {
 			return time.Time{}, errors.Wrapf(err, "failed to list statuses for page %d", opt.Page)
 		}
 		if len(statuses) == 0 {
-			return time.Time{}, nil
+			break
 		}
 		if resp.NextPage == 0 {
 			last := statuses[len(statuses)-1]
 			return last.GetCreatedAt().Time, nil
 		}
 		opt.Page = resp.NextPage
+	}
+
+	checkOpt := &github.ListCheckSuiteOptions{
+		ListOptions: github.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	// Check suites are also returned in reverse chronological order. Check
+	// runs superseded commit statuses as policy-bot's evaluation result, so
+	// use the oldest suite as the push-time estimate when no statuses exist.
+	for {
+		checkSuites, resp, err := ghc.client.Checks.ListCheckSuitesForRef(ghc.ctx, ghc.owner, ghc.repo, sha, checkOpt)
+		if err != nil {
+			return time.Time{}, errors.Wrapf(err, "failed to list check suites for page %d", checkOpt.Page)
+		}
+		if len(checkSuites.CheckSuites) == 0 {
+			return time.Time{}, nil
+		}
+		if resp.NextPage == 0 {
+			last := checkSuites.CheckSuites[len(checkSuites.CheckSuites)-1]
+			return last.GetCreatedAt().Time, nil
+		}
+		checkOpt.Page = resp.NextPage
 	}
 }
 
