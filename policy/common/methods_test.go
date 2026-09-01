@@ -59,12 +59,14 @@ func TestCandidates(t *testing.T) {
 				CreatedAt: now.Add(1 * time.Minute),
 				Author:    pull.NewAuthor("rrandom"),
 				State:     pull.ReviewCommented,
+				SHA:       "review-sha-1",
 			},
 			{
 				CreatedAt: now.Add(3 * time.Minute),
 				Author:    pull.NewAuthor("mhaypenny"),
 				State:     pull.ReviewChangesRequested,
 				Body:      "pr needs work",
+				SHA:       "review-sha-2",
 			},
 			{
 				CreatedAt: now.Add(5 * time.Minute),
@@ -151,6 +153,7 @@ func TestCandidates(t *testing.T) {
 
 		require.Len(t, cs, 1, "incorrect number of candidates found")
 		assert.Equal(t, "mhaypenny", cs[0].User())
+		assert.Equal(t, prctx.ReviewsValue[1].SHA, cs[0].SHA)
 	})
 
 	t.Run("deduplicate", func(t *testing.T) {
