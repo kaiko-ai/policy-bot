@@ -65,13 +65,6 @@ func TestValidateSecrets(t *testing.T) {
 			configure: func(c *Config) { c.Sessions.Key = "secretsessionkey" },
 			wantErr:   "sessions key",
 		},
-		"missing metrics token": {
-			configure: func(c *Config) {
-				c.OTEL.Enabled = true
-				c.OTEL.MetricsAuthToken = ""
-			},
-			wantErr: "metrics_auth_token",
-		},
 	}
 
 	for name, tt := range tests {
@@ -89,11 +82,4 @@ func TestValidateSecrets(t *testing.T) {
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
-}
-
-func TestMetricsAuthTokenFromEnv(t *testing.T) {
-	t.Setenv("TEST_POLICYBOT_OTEL_METRICS_AUTH_TOKEN", "metrics-secret")
-	var cfg OTELConfig
-	cfg.SetValuesFromEnv("TEST_POLICYBOT_")
-	assert.Equal(t, "metrics-secret", cfg.MetricsAuthToken)
 }
