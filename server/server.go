@@ -16,7 +16,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"math"
 	"net/http"
@@ -74,22 +73,6 @@ func httpCacheMaxSize(configured datasize.ByteSize) (int64, error) {
 	}
 	// #nosec G115 -- the range check above proves configured fits in an int64.
 	return int64(configured), nil
-}
-
-func requireBearerToken(expected string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const bearerPrefix = "Bearer "
-		authorization := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(authorization, bearerPrefix)
-		valid := strings.HasPrefix(authorization, bearerPrefix) && len(token) == len(expected) &&
-			subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
-		if !valid {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // New instantiates a new Server.
@@ -314,16 +297,6 @@ func New(c *Config) (*Server, error) {
 	mux.Handle(TrackPattern(pat.Get("/api/health")), handler.Health())
 	mux.Handle(TrackPattern(pat.Put("/api/validate")), handler.Validate())
 	mux.Handle(TrackPattern(pat.Post("/api/simulate/:owner/:repo/:number")), hatpear.Try(simulateHandler))
-
-	// Mount prometheus metrics endpoint (if OTEL is enabled)
-	if promHandler := otelProvider.PrometheusHandler(); promHandler != nil {
-		wrappedHandler := requireBearerToken(c.OTEL.MetricsAuthToken, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			baseapp.IgnoreAll(r)
-			promHandler.ServeHTTP(w, r)
-		}))
-		mux.Handle(TrackPattern(pat.Get("/api/metrics")), wrappedHandler) // legacy path
-		mux.Handle(TrackPattern(pat.Get("/metrics")), wrappedHandler)     // standard path
-	}
 
 	oauth2RedirectURL := *publicURL
 	oauth2RedirectURL.Path = basePath + oauth2.DefaultRoute

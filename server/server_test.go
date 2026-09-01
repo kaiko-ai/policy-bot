@@ -16,8 +16,6 @@ package server
 
 import (
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/c2h5oh/datasize"
@@ -36,33 +34,4 @@ func TestHTTPCacheMaxSize(t *testing.T) {
 
 	_, err = httpCacheMaxSize(datasize.ByteSize(uint64(math.MaxInt64) + 1))
 	require.ErrorContains(t, err, "exceeds the supported maximum")
-}
-
-func TestRequireBearerToken(t *testing.T) {
-	handler := requireBearerToken("metrics-secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-
-	for name, authorization := range map[string]string{
-		"missing":      "",
-		"wrong scheme": "Basic metrics-secret",
-		"wrong token":  "Bearer wrong-secret",
-		"empty token":  "Bearer ",
-	} {
-		t.Run(name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-			request.Header.Set("Authorization", authorization)
-			handler.ServeHTTP(recorder, request)
-
-			assert.Equal(t, http.StatusUnauthorized, recorder.Code)
-			assert.Equal(t, "Bearer", recorder.Header().Get("WWW-Authenticate"))
-		})
-	}
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	request.Header.Set("Authorization", "Bearer metrics-secret")
-	handler.ServeHTTP(recorder, request)
-	assert.Equal(t, http.StatusNoContent, recorder.Code)
 }

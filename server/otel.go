@@ -23,11 +23,10 @@ import (
 	"github.com/palantir/policy-bot/version"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	prometheusbridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
-	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -45,15 +44,6 @@ type OTELProvider struct {
 	tracerProvider *sdktrace.TracerProvider
 	meterProvider  *sdkmetric.MeterProvider
 	promRegistry   *prometheus.Registry
-	promHandler    http.Handler
-}
-
-// PrometheusHandler returns the HTTP handler for serving Prometheus metrics.
-func (p *OTELProvider) PrometheusHandler() http.Handler {
-	if p == nil {
-		return nil
-	}
-	return p.promHandler
 }
 
 // PromRegistry returns the Prometheus registry for registering additional collectors.
@@ -64,8 +54,9 @@ func (p *OTELProvider) PromRegistry() *prometheus.Registry {
 	return p.promRegistry
 }
 
-// InitOTEL initializes OpenTelemetry with autoexport for traces and Prometheus for metrics.
-// It returns an OTELProvider that includes a Prometheus HTTP handler for mounting on the main server.
+// InitOTEL initializes OpenTelemetry with autoexport for both traces and metrics.
+// Exporters are selected via the standard OTEL_TRACES_EXPORTER and
+// OTEL_METRICS_EXPORTER environment variables (both default to OTLP).
 // If OTEL is disabled in config, it returns nil with no error.
 func InitOTEL(ctx context.Context, cfg *OTELConfig) (*OTELProvider, error) {
 	if !cfg.Enabled {
@@ -106,18 +97,22 @@ func InitOTEL(ctx context.Context, cfg *OTELConfig) (*OTELProvider, error) {
 	// Set as global tracer provider
 	otel.SetTracerProvider(tracerProvider)
 
-	// Create Prometheus registry and exporter for serving metrics on main server
+	// Dedicated Prometheus registry used only to bridge legacy go-metrics
+	// collectors (e.g. githubapp scheduler metrics) into the OTel pipeline.
 	promRegistry := prometheus.NewRegistry()
-	exporter, err := promexporter.New(
-		promexporter.WithRegisterer(promRegistry),
-	)
+	autoexport.WithFallbackMetricProducer(func(context.Context) (sdkmetric.Producer, error) {
+		return prometheusbridge.NewMetricProducer(prometheusbridge.WithGatherer(promRegistry)), nil
+	})
+
+	// Use autoexport to create the metric reader based on environment variables.
+	// This respects OTEL_METRICS_EXPORTER and OTEL_EXPORTER_OTLP_ENDPOINT.
+	metricReader, err := autoexport.NewMetricReader(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create prometheus exporter")
+		return nil, errors.Wrap(err, "failed to create OTEL metric reader")
 	}
 
-	// Create meter provider with prometheus exporter
 	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(exporter),
+		sdkmetric.WithReader(metricReader),
 		sdkmetric.WithResource(res),
 	)
 
@@ -130,14 +125,10 @@ func InitOTEL(ctx context.Context, cfg *OTELConfig) (*OTELProvider, error) {
 		propagation.Baggage{},
 	))
 
-	// Create prometheus HTTP handler
-	promHandler := promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
-
 	return &OTELProvider{
 		tracerProvider: tracerProvider,
 		meterProvider:  meterProvider,
 		promRegistry:   promRegistry,
-		promHandler:    promHandler,
 	}, nil
 }
 

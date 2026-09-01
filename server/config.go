@@ -110,10 +110,6 @@ type OTELConfig struct {
 	// ServiceName is the name used to identify this service in traces.
 	// Defaults to "policy-bot" if not specified.
 	ServiceName string `yaml:"service_name"`
-
-	// MetricsAuthToken protects the Prometheus endpoints with bearer-token
-	// authentication. It is required when OpenTelemetry metrics are enabled.
-	MetricsAuthToken string `yaml:"metrics_auth_token"`
 }
 
 func (c *OTELConfig) SetValuesFromEnv(prefix string) {
@@ -125,9 +121,6 @@ func (c *OTELConfig) SetValuesFromEnv(prefix string) {
 	if v, ok := os.LookupEnv("OTEL_SERVICE_NAME"); ok && c.ServiceName == "" {
 		c.ServiceName = v
 	}
-	if v, ok := os.LookupEnv(prefix + "OTEL_METRICS_AUTH_TOKEN"); ok {
-		c.MetricsAuthToken = v
-	}
 }
 
 func (c *Config) validateSecrets() error {
@@ -136,9 +129,6 @@ func (c *Config) validateSecrets() error {
 	}
 	if strings.TrimSpace(c.Sessions.Key) == "" || c.Sessions.Key == "secretsessionkey" {
 		return errors.New("sessions key must be configured and must not use the example value")
-	}
-	if c.OTEL.Enabled && strings.TrimSpace(c.OTEL.MetricsAuthToken) == "" {
-		return errors.New("otel metrics_auth_token must be configured when OpenTelemetry is enabled")
 	}
 	return nil
 }
