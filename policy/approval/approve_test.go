@@ -468,6 +468,36 @@ func TestIsApproved(t *testing.T) {
 		assertPending(t, prctx, r, "0/1 required approvals. Ignored 1 approval from disqualified users")
 	})
 
+	t.Run("preserveReviewOfHeadWhenPushTimestampIsNewer", func(t *testing.T) {
+		prctx := basePullContext()
+		headSHA := "c6ade256ecfc755d8bc877ef22cc9e01745d46bb"
+		prctx.PushedAtValue = map[string]time.Time{
+			headSHA: now.Add(85 * time.Second),
+		}
+		prctx.HeadSHAValue = headSHA
+		prctx.CommitsValue = []*pull.Commit{{
+			SHA:       headSHA,
+			Author:    "mhaypenny",
+			Committer: "mhaypenny",
+		}}
+		prctx.ReviewsValue[1].SHA = headSHA
+
+		r := &Rule{
+			Options: Options{
+				InvalidateOnPush: ptr(true),
+				Defaults:         &defaultOptions,
+			},
+			Requires: Requires{
+				Count: 1,
+				Actors: common.Actors{
+					Users: []string{"review-approver"},
+				},
+			},
+		}
+
+		assertApproved(t, prctx, r, "Approved by review-approver")
+	})
+
 	t.Run("ignoreUpdateMergeAfterReview", func(t *testing.T) {
 		prctx := basePullContext()
 		prctx.PushedAtValue = map[string]time.Time{

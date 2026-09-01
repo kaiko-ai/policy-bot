@@ -397,6 +397,14 @@ func (r *Rule) filterInvalidCandidates(ctx context.Context, prctx pull.Context, 
 	var allowed []*common.Candidate
 	var dismissed []*common.Dismissal
 	for _, c := range candidates {
+		// GitHub associates a review with the exact commit it covers. A review
+		// on the current head cannot have been invalidated by a later push, even
+		// if an inferred push timestamp is newer (for example, when a workflow
+		// triggered by the review creates a check suite on the same commit).
+		if c.Type == common.ReviewCandidate && c.SHA != "" && c.SHA == prctx.HeadSHA() {
+			allowed = append(allowed, c)
+			continue
+		}
 		if c.CreatedAt.After(lastPushedAt) {
 			allowed = append(allowed, c)
 		} else {

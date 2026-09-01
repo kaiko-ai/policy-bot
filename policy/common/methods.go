@@ -101,6 +101,7 @@ const (
 type Candidate struct {
 	Type         CandidateType
 	ReviewID     string
+	SHA          string
 	Author       *pull.Author
 	CreatedAt    time.Time
 	LastEditedAt time.Time
@@ -174,6 +175,7 @@ func (m *Methods) Candidates(ctx context.Context, prctx pull.Context) ([]*Candid
 						candidates = append(candidates, &Candidate{
 							Type:         ReviewCandidate,
 							ReviewID:     r.ID,
+							SHA:          r.SHA,
 							Author:       r.Author,
 							CreatedAt:    r.CreatedAt,
 							LastEditedAt: r.LastEditedAt,
@@ -183,6 +185,7 @@ func (m *Methods) Candidates(ctx context.Context, prctx pull.Context) ([]*Candid
 					candidates = append(candidates, &Candidate{
 						Type:         ReviewCandidate,
 						ReviewID:     r.ID,
+						SHA:          r.SHA,
 						Author:       r.Author,
 						CreatedAt:    r.CreatedAt,
 						LastEditedAt: r.LastEditedAt,
